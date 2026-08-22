@@ -1,0 +1,14 @@
+[Unit]
+Description=vSphere Supervisor Readiness Check
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/supervisor-check
+ExecStart=/usr/bin/python3 app.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

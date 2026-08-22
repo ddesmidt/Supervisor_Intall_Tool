@@ -1,0 +1,6 @@
+export VC_HOST="vc-mgmt-a.site-a.vcf.lab"
+export VC_USER="administrator@vsphere.local"
+export VC_PASS="VMware123!VMware123!"
+export NSX_HOST="nsx-mgmt-a.site-a.vcf.lab"
+export NSX_USER="admin"
+export NSX_PASS="VMware123!VMware123!"
