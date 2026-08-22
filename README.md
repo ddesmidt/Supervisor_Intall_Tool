@@ -1,0 +1,164 @@
+# vSphere Supervisor Readiness Check + Installation
+
+A web application that guides you through checking prerequisites and deploying **vSphere Supervisor** (formerly vSphere with Tanzu) in a **VMware Cloud Foundation 9.1** environment.
+
+---
+
+## Overview
+
+The tool is a self-hosted Flask web app deployed on a VM inside your VCF environment. It connects directly to your vCenter and NSX Manager APIs to:
+
+1. **Check if Supervisor is already installed** on a vCenter cluster
+2. **Verify all NSX prerequisites** are in place for your chosen deployment mode
+3. **Automatically fix missing prerequisites** via guided wizards
+4. **Deploy Supervisor** once all requirements are met
+
+It supports all three vSphere Supervisor deployment modes:
+
+| Mode | Description |
+|---|---|
+| **NSX-VPC Distributed** ⭐ | Recommended. VNA cluster handles overlay networking — no Edge Node / Tier-0 / BGP required |
+| **NSX-VPC Centralized** | Requires Edge Cluster + Tier-0 + BGP |
+| **VDS / FLB** | Legacy mode — no NSX required but limited network services |
+
+---
+
+## Screenshots
+
+The tool displays three side-by-side columns — one per deployment mode — each showing a live readiness check with pass/warn/fail status per step:
+
+```
+┌─────────────────────────┬─────────────────────────┬─────────────────────────┐
+│  NSX-VPC Distributed ⭐  │   NSX-VPC Centralized   │        VDS / FLB        │
+│  Pros / Cons / Reqs     │  Pros / Cons / Reqs     │  Pros / Cons / Reqs     │
+├─────────────────────────┼─────────────────────────┼─────────────────────────┤
+│ ✅ vCenter Auth          │ ✅ vCenter Auth          │ ✅ vCenter Auth          │
+│ ✅ Supervisor Capability │ ✅ Supervisor Capability │ ✅ Supervisor Capability │
+│ ✅ NSX Host Preparation  │ ✅ NSX Host Preparation  │ — (not required)        │
+│ ✅ VNA Cluster           │ ⚠️  Edge Cluster [Fix]   │ — (not required)        │
+│ ✅ Distributed Ext Conn  │ ❌ Centralized Ext Conn  │ — (not required)        │
+│ ✅ Distributed TGW       │ ❌ Centralized TGW       │ — (not required)        │
+│ ✅ External IP Block     │ ❌ External IP Block      │ — (not required)        │
+│ ✅ VPC Profile           │ ❌ VPC Profile            │ — (not required)        │
+├─────────────────────────┼─────────────────────────┼─────────────────────────┤
+│  [ Deploy Supervisor ]  │  [ Deploy — disabled ]  │  [ Deploy — n/a ]       │
+└─────────────────────────┴─────────────────────────┴─────────────────────────┘
+```
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- A Linux VM inside your VCF environment with:
+  - Ubuntu 22.04+ or equivalent
+  - Python 3.10+
+  - Network access to vCenter and NSX Manager
+- VCF 9.1 environment with:
+  - SDDC Manager
+  - Management + WLD vCenter
+  - NSX Manager
+
+### Install and run
+
+```bash
+# Clone the repo
+git clone https://github.com/ddesmidt/Supervisor_Intall_Tool.git
+cd Supervisor_Intall_Tool
+
+# Install Python dependencies
+apt-get install -y python3-flask python3-requests
+
+# Copy app to standard location
+cp -r app/ /opt/supervisor-check/
+
+# Install and start the systemd service
+cp app/supervisor-check.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now supervisor-check
+
+# App is now running on port 80
+```
+
+> See [docs/INSTALLATION.md](docs/INSTALLATION.md) for the full deployment guide.
+
+---
+
+## Usage
+
+1. Open `http://<VM-IP>/` in your browser
+2. Enter your **vCenter IP/FQDN** + credentials, and **NSX IP/FQDN** + credentials
+3. Click **"Check if Supervisor is Installed"** to see current state
+4. If not installed, click **"Check Supervisor Requirements"** to see the 3-column readiness matrix
+5. Use **"Fix"** buttons to remediate any failed steps
+6. Once the column you want turns all-green, click **"Deploy Supervisor"**
+
+> See [docs/USAGE.md](docs/USAGE.md) for a detailed walkthrough and [docs/CHECKS.md](docs/CHECKS.md) for an explanation of each requirement check.
+
+---
+
+## Architecture
+
+```
+Browser  ──────────────────────────────────────────────────  Flask app (port 80)
+  │                                                               │
+  │   Alpine.js + Tailwind CSS UI                                 │
+  │                                                               │
+  └──── GET /                          ◄── index.html (UI)        │
+  └──── POST /api/check-installed      ◄── vCenter REST API       │
+  └──── POST /api/check-requirements   ◄── vCenter + NSX APIs     │
+  └──── POST /api/fix/*                ◄── NSX Policy API         │
+  └──── POST /api/install-supervisor   ◄── vCenter REST API       │
+  └──── POST /api/supervisor-status    ◄── vCenter REST API       │
+```
+
+**Backend** (`app/app.py`) — Python Flask:
+- All vCenter and NSX API calls are made server-side (avoids CORS)
+- Automatic VCF 9.1 SSO domain detection for vCenter authentication
+- NSX credentials are passed per-request (never stored)
+
+**Frontend** (`app/templates/index.html`) — single-page app:
+- Alpine.js for reactivity
+- Tailwind CSS for styling (CDN)
+- Font Awesome icons (CDN)
+- No build step required
+
+---
+
+## Project Structure
+
+```
+Supervisor_Intall_Tool/
+├── app/
+│   ├── app.py                    # Flask backend — all API logic
+│   ├── templates/
+│   │   └── index.html            # Single-page frontend
+│   ├── requirements.txt          # Python dependencies
+│   └── supervisor-check.service  # systemd unit file
+├── vsphere-supervisor-deployment.md  # VCF 9.1 deployment reference
+├── docs/
+│   ├── INSTALLATION.md           # Full deployment guide
+│   ├── USAGE.md                  # How to use the web interface
+│   └── CHECKS.md                 # Requirement checks reference
+└── README.md
+```
+
+---
+
+## Credentials Required
+
+| System | Credential used |
+|---|---|
+| vCenter (WLD) | `administrator@vsphere.local` or SSO user (auto-detected) |
+| NSX Manager | `admin` |
+
+Credentials are entered in the browser and sent to the Flask backend per-request. They are never stored on disk.
+
+> **VCF 9.1 note**: WLD vCenter uses an internal SSO domain (e.g. `wld.sso`) rather than the federated `vcf.lab` domain. The app auto-detects the correct domain from the vCenter's `WWW-Authenticate` header.
+
+---
+
+## License
+
+Internal tool — VMware / Broadcom lab use.
