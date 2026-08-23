@@ -159,15 +159,20 @@ def nsx_get(nsx_url: str, user: str, pwd: str, path: str):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index_clarity.html")
 
 
 @app.route("/api/check-installed", methods=["POST"])
 def check_installed():
     body = request.get_json(force=True)
-    vc_url = normalize_url(body.get("vc_url", ""))
+    vc_url   = normalize_url(body.get("vc_url", ""))
     username = body.get("username", "")
     password = body.get("password", "")
+    nsx_url_raw = (body.get("nsx_url") or "").strip()
+    # Fall back to auto-discovery from vCenter if NSX URL not supplied (e.g. browser autofill race)
+    nsx_url  = normalize_url(nsx_url_raw) if nsx_url_raw else guess_nsx_url(vc_url)
+    nsx_user = body.get("nsx_user") or "admin"
+    nsx_pass = body.get("nsx_pass") or password
 
     result = {"success": False, "installed": False, "clusters": [], "capability": {},
               "error": None, "auth_user": None}
@@ -192,6 +197,81 @@ def check_installed():
                 except Exception:
                     pass
             enriched.append(c)
+
+        # Determine human-readable network mode for each cluster.
+        # For NSX_VPC: vCenter cluster detail → VPC profile → NSX TGW → check attachment type.
+        for c in enriched:
+            np = c.get("network_provider", "")
+            if np == "VSPHERE_NETWORK":
+                c["network_mode"] = "VDS / FLB"
+            elif np == "NSX_T":
+                c["network_mode"] = "NSX-T (Legacy)"
+            elif np == "NSX_VPC":
+                c["network_mode"] = "NSX-VPC"  # default; refined below
+                c["network_mode_warning"] = None
+
+                def _detect_nsx_vpc_mode(nsx, user, pw, prof_path):
+                    """Return 'NSX-VPC Distributed', 'NSX-VPC Centralized', or None."""
+                    vcp      = nsx_get(nsx, user, pw, f"/policy/api/v1{prof_path}")
+                    tgw_path = (vcp or {}).get("transit_gateway_path", "")
+                    if not tgw_path:
+                        return None
+                    parts   = tgw_path.rstrip("/").split("/")
+                    tgw_id  = parts[-1]
+                    try:
+                        tgw_proj = parts[parts.index("projects") + 1]
+                    except (ValueError, IndexError):
+                        tgw_proj = "default"
+                    ta   = nsx_get(nsx, user, pw,
+                                   f"/policy/api/v1/orgs/default/projects/{tgw_proj}"
+                                   f"/transit-gateways/{tgw_id}/attachments")
+                    atts = (ta or {}).get("results", [])
+                    if any("/distributed-vlan-connections/" in (a.get("connection_path") or "") for a in atts):
+                        return "NSX-VPC Distributed"
+                    if any("/gateway-connections/" in (a.get("connection_path") or "") for a in atts):
+                        return "NSX-VPC Centralized"
+                    return None
+
+                if nsx_url:
+                    # Build the VPC profile path from vCenter cluster detail
+                    vpc_net       = c.get("vpc_network") or {}
+                    vpc_prof_path = vpc_net.get("vpc_connectivity_profile", "")
+                    nsx_proj_path = vpc_net.get("nsx_project", "/orgs/default/projects/default")
+                    parts_proj    = nsx_proj_path.rstrip("/").split("/")
+                    nsx_proj_id   = (parts_proj[parts_proj.index("projects") + 1]
+                                     if "projects" in parts_proj else "default")
+                    if not vpc_prof_path:
+                        vpc_prof_path = f"/orgs/default/projects/{nsx_proj_id}/vpc-connectivity-profiles/default"
+                    if "/" not in vpc_prof_path:
+                        vpc_prof_path = f"/orgs/default/projects/{nsx_proj_id}/vpc-connectivity-profiles/{vpc_prof_path}"
+
+                    # First attempt with supplied NSX URL
+                    detected = None
+                    try:
+                        detected = _detect_nsx_vpc_mode(nsx_url, nsx_user, nsx_pass, vpc_prof_path)
+                    except Exception:
+                        pass
+
+                    # Second attempt: auto-discovered URL (handles truncated/wrong FQDNs)
+                    if detected is None:
+                        _fallback = guess_nsx_url(vc_url)
+                        if _fallback and _fallback != nsx_url:
+                            try:
+                                detected = _detect_nsx_vpc_mode(_fallback, nsx_user, nsx_pass, vpc_prof_path)
+                            except Exception:
+                                pass
+
+                    if detected:
+                        c["network_mode"]         = detected
+                        c["network_mode_warning"] = None
+                    else:
+                        c["network_mode_warning"] = (
+                            "Cannot reach NSX to determine if Distributed or Centralized. "
+                            "Check NSX FQDN / credentials."
+                        )
+            else:
+                c["network_mode"] = np or "Unknown"
+                c["network_mode_warning"] = None
 
         result.update(success=True, installed=bool(enriched), clusters=enriched,
                       capability=capability, auth_user=effective_user)
@@ -682,27 +762,32 @@ def check_requirements():
             else:
                 all_ext = d.get("ext_blocks", [])
 
+                # Build the set of DVLAN gateway subnets once (used by both modes)
+                dvlan_nets = []
+                for dv in d.get("dvlan", []):
+                    for gw in (dv.get("gateway_addresses") or []):
+                        try:
+                            dvlan_nets.append(ipaddress.ip_network(gw, strict=False))
+                        except ValueError:
+                            pass
+
+                def _overlaps_dvlan(cidr):
+                    try:
+                        net = ipaddress.ip_network(cidr, strict=False)
+                        return any(net.overlaps(dv) for dv in dvlan_nets)
+                    except ValueError:
+                        return False
+
                 if mode == "distributed":
-                    # Distributed: any external IP block is valid
-                    valid_blocks = all_ext
+                    # Distributed: the block must come FROM a DVLAN connection subnet
+                    # (its CIDR must overlap with at least one Distributed External Connection gateway subnet)
+                    if dvlan_nets:
+                        valid_blocks = [b for b in all_ext
+                                        if _overlaps_dvlan(b.get("cidr", ""))]
+                    else:
+                        valid_blocks = all_ext  # no DVLAN connections yet → show all
                 else:
                     # Centralized: the block must NOT overlap with a DVLAN gateway subnet
-                    # (those subnets belong to the Distributed physical fabric)
-                    dvlan_nets = []
-                    for dv in d.get("dvlan", []):
-                        for gw in (dv.get("gateway_addresses") or []):
-                            try:
-                                dvlan_nets.append(ipaddress.ip_network(gw, strict=False))
-                            except ValueError:
-                                pass
-
-                    def _overlaps_dvlan(cidr):
-                        try:
-                            net = ipaddress.ip_network(cidr, strict=False)
-                            return any(net.overlaps(dv) for dv in dvlan_nets)
-                        except ValueError:
-                            return False
-
                     valid_blocks = [b for b in all_ext
                                     if not _overlaps_dvlan(b.get("cidr", ""))]
 
@@ -722,9 +807,17 @@ def check_requirements():
                         "\n".join(detail_lines))
                 else:
                     if mode == "distributed":
+                        # Mention any non-matching blocks that were rejected
+                        overlap_note = ""
+                        rejected = [b for b in all_ext if not _overlaps_dvlan(b.get("cidr", ""))]
+                        if rejected:
+                            names = [b.get("display_name", "?") for b in rejected]
+                            overlap_note = (f"\nNote: {len(rejected)} block(s) found ({', '.join(names)})"
+                                            " but their CIDR does not match any Distributed External Connection subnet.")
                         ext_detail = (
                             "An External IP Block is required for future Supervisor VIP and NAT allocation.\n"
-                            "In the Distributed option, that's the subnet defined in Step 4.\n"
+                            "In the Distributed option, the CIDR must match the subnet from Step 4 "
+                            "(Distributed External Connection)." + overlap_note + "\n"
                             "This tool will guide you through the creation of an External IP Block."
                         )
                     else:
@@ -2095,10 +2188,14 @@ def fix_configure_vpc_profile():
         if private_ip_block_path:
             payload["private_tgw_ip_blocks"] = [private_ip_block_path]
 
-        # If the profile already exists, PATCH (TGW path cannot be changed by NSX).
-        # If new, PUT to create it with the TGW path.
+        # If the profile already exists, PATCH (TGW path cannot be changed by NSX,
+        # but must still be present in every request as it is a required field).
+        # If new, PUT to create it with the desired TGW path.
         existing = nsx_get(nsx_url, nsx_user, nsx_pass, profile_api)
         if existing:
+            # Carry the existing transit_gateway_path unchanged (NSX forbids changing it
+            # but also rejects requests where the field is absent).
+            payload["transit_gateway_path"] = (existing.get("transit_gateway_path") or tgw_path)
             r = requests.patch(
                 f"{nsx_url}{profile_api}",
                 auth=(nsx_user, nsx_pass),

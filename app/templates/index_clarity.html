@@ -1,0 +1,2965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>vSphere Supervisor Readiness Check + Installation</title>
+
+  <!-- Clarity Design System CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/@clr/ui@13.0.0/clr-ui.min.css">
+  <!-- Font Awesome icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <!-- Alpine.js -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+
+  <style>
+    [x-cloak] { display: none !important; }
+    .fade-in  { animation: fadeIn 0.25s ease; }
+    @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; } }
+    pre { font-family: 'Courier New', Courier, monospace; }
+
+    /* Clarity colour utilities */
+    .clr-ok    { color: #48960c; }
+    .clr-warn  { color: #e07400; }
+    .clr-error { color: #c21d00; }
+    .clr-info  { color: #6e777b; }
+
+    /* Force full-width inputs / selects inside Clarity form controls */
+    .clr-input  { width: 100% !important; max-width: 100% !important; }
+    .clr-select { width: 100% !important; max-width: 100% !important; }
+    .clr-control-container { width: 100% !important; max-width: 100% !important; }
+    .clr-input-wrapper, .clr-select-wrapper { width: 100% !important; max-width: 100% !important; }
+
+    /* Page canvas */
+    .app-content { max-width: 1320px; margin: 0 auto; padding: 1.5rem 1rem; }
+
+    /* Three-column requirements grid */
+    .req-cols {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+      align-items: start;
+    }
+    @media (max-width: 960px) { .req-cols { grid-template-columns: 1fr; } }
+
+    /* Step / accordion rows */
+    .step-row {
+      padding: 0.55rem 0.8rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.45rem;
+      border-bottom: 1px solid #dfe3e6;
+      transition: background 0.1s;
+    }
+    .step-row:last-child { border-bottom: none; }
+    .step-row.clickable:hover { background: #f3f6fa; cursor: pointer; }
+    .step-row.no-click { cursor: default; }
+
+    /* Details drawer under a step row */
+    .step-details {
+      padding: 0.6rem 0.8rem;
+      font-size: 0.72rem;
+      line-height: 1.5;
+      border-top: 1px solid #dfe3e6;
+    }
+
+    /* Fix button badge */
+    .fix-badge {
+      font-size: 0.62rem;
+      font-weight: 700;
+      padding: 0.1rem 0.4rem;
+      border-radius: 2px;
+      background: #fae8e8;
+      color: #c21d00;
+      border: 1px solid #f5c2c2;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .fix-badge:hover { background: #fdd0d0; }
+
+    /* Pros / Cons / Requirements section */
+    .pros-cons-section {
+      min-height: 170px;
+      font-size: 0.72rem;
+      color: #4a5568;
+      padding: 0.5rem 0.85rem;
+      border-bottom: 1px solid #dfe3e6;
+      line-height: 1.4;
+    }
+    /* Div-based items — immune to all Clarity <p> / <li> margin/line-height rules */
+    .pc-label, .pc-item {
+      display: block !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      font-size: 0.72rem !important;
+      line-height: 1.35 !important;
+    }
+    .pc-label { font-weight: 700; color: #2b2b2b; }
+    .pc-label-gap { margin-top: 0.3rem !important; }
+    .pc-label-cons { color: #c21d00 !important; }
+    .pc-item { color: #4a5568; }
+
+    /* Chevron */
+    .chevron { font-size: 0.62rem; color: #c5c8ca; flex-shrink: 0; margin-top: 0.12rem; transition: transform 0.2s; }
+    .chevron.open { transform: rotate(180deg); }
+
+    /* Step badge (S1, S2 …) */
+    .step-badge {
+      font-size: 0.58rem;
+      font-weight: 700;
+      padding: 0.08rem 0.3rem;
+      background: #dfe3e6;
+      color: #6e777b;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    /* Status label chips */
+    .status-chip {
+      font-size: 0.68rem;
+      font-weight: 700;
+      padding: 0.15rem 0.45rem;
+      border-radius: 2px;
+    }
+    .status-chip.ready       { background: #dff0d0; color: #48960c; }
+    .status-chip.warnings    { background: #fdf5e0; color: #e07400; }
+    .status-chip.issues      { background: #fae8e8; color: #c21d00; }
+    .status-chip.configuring { background: #dce9f4; color: #0072a3; }
+    .status-chip.running     { background: #dff0d0; color: #48960c; }
+    .status-chip.error       { background: #fae8e8; color: #c21d00; }
+
+    /* Cluster / storage policy selector rows */
+    .sel-row {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      padding: 0.7rem 0.85rem;
+      border: 1px solid #dfe3e6;
+      border-radius: 3px;
+      margin-bottom: 0.5rem;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.12s;
+    }
+    .sel-row:hover   { border-color: #0072a3; background: #f3f6fa; }
+    .sel-row.selected{ border-color: #0072a3; background: #e8f3fb; }
+
+    /* Radio dot indicator */
+    .radio-dot {
+      width: 1rem; height: 1rem;
+      border-radius: 50%;
+      border: 2px solid #c5c8ca;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: border-color 0.15s;
+    }
+    .radio-dot.selected {
+      border-color: #0072a3;
+      background: #0072a3;
+    }
+    .radio-dot.selected::after {
+      content: '';
+      width: 0.38rem; height: 0.38rem;
+      border-radius: 50%;
+      background: white;
+      display: block;
+    }
+
+    /* Wizard step dots */
+    .wiz-dot {
+      width: 1.5rem; height: 1.5rem;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.68rem;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .wiz-dot.active  { background: #0072a3; color: white; }
+    .wiz-dot.done    { background: #48960c; color: white; }
+    .wiz-dot.pending { background: #dfe3e6; color: #6e777b; }
+
+    /* Review table */
+    .review-tbl { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    .review-tbl tr:not(:last-child) td,
+    .review-tbl tr:not(:last-child) th { border-bottom: 1px solid #dfe3e6; }
+    .review-tbl tr:nth-child(even) { background: #f3f6fa; }
+    .review-tbl th {
+      padding: 0.5rem 0.75rem; font-weight: 600; color: #6e777b;
+      text-transform: uppercase; font-size: 0.62rem;
+      text-align: left; white-space: nowrap; width: 9.5rem;
+    }
+    .review-tbl td {
+      padding: 0.5rem 0.75rem;
+      font-family: monospace;
+      word-break: break-all;
+      color: #2b2b2b;
+      font-size: 0.8rem;
+    }
+
+    /* VNA node progress bars */
+    .node-bar { width: 100%; height: 0.45rem; background: #dfe3e6; border-radius: 2px; overflow: hidden; margin: 0.2rem 0; }
+    .node-bar-fill { height: 100%; border-radius: 2px; transition: width 0.5s; }
+    .node-bar-fill.in-progress { background: #0072a3; }
+    .node-bar-fill.success     { background: #48960c; }
+    .node-bar-fill.failed      { background: #c21d00; }
+
+    /* Overrides to make Clarity cards feel a bit crisper */
+    .card { border: 1px solid #dfe3e6 !important; border-radius: 3px; }
+    .card-header {
+      border-bottom: 1px solid #dfe3e6 !important;
+      padding: 0.45rem 0.85rem !important;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #2b2b2b;
+      display: flex !important;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .card-footer {
+      border-top: 1px solid #dfe3e6 !important;
+      padding: 0.45rem 0.85rem !important;
+      background: #fafafa;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    /* Tighten card-block when it appears elsewhere */
+    .card-block { padding: 0.65rem 0.85rem !important; }
+
+    /* Compact form fields — all !important to beat Clarity's input/label rules */
+    .cmp-field { display: flex !important; flex-direction: column !important; }
+    .cmp-label {
+      display: block !important;
+      font-size: 0.62rem !important;
+      font-weight: 600 !important;
+      color: #6e777b !important;
+      margin: 0 0 0.1rem 0 !important;
+      padding: 0 !important;
+      line-height: 1.2 !important;
+    }
+    .cmp-input {
+      display: block !important;
+      height: auto !important;
+      min-height: unset !important;
+      border: none !important;
+      border-bottom: 1px solid #b3b9be !important;
+      border-radius: 0 !important;
+      padding: 0.12rem 0.1rem !important;
+      font-size: 0.8rem !important;
+      line-height: 1.3 !important;
+      background: transparent !important;
+      color: #2b2b2b !important;
+      outline: none !important;
+      width: 100% !important;
+      box-sizing: border-box !important;
+      box-shadow: none !important;
+    }
+    .cmp-input:focus { border-bottom-color: #0072a3 !important; }
+
+    /* Modal full-screen overlay  (Clarity's .modal already does this) */
+    /* We keep the Clarity class; only override max-height of body */
+    .modal-body { max-height: 72vh; overflow-y: auto; }
+
+    /* Alert compact variant */
+    .alert-sm .alert-items { padding: 0.35rem 0.65rem; }
+    .alert-sm .alert-text  { font-size: 0.75rem; }
+
+    /* Keep footer text small */
+    .app-footer { text-align: center; font-size: 0.72rem; color: #6e777b; padding: 1.5rem 0 1rem; }
+
+    /* ── Connection card: custom styles, zero Clarity interference ── */
+    .conn-card {
+      border: 1px solid #dfe3e6;
+      border-radius: 3px;
+      background: #fff;
+      margin-bottom: 1.2rem;
+      font-size: 14px;   /* px, not rem — immune to Clarity's html font-size */
+    }
+    .conn-card-header {
+      border-bottom: 1px solid #dfe3e6;
+      padding: 7px 14px;
+      font-size: 16px;
+      font-weight: 600;
+      color: #2b2b2b;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #fff;
+    }
+    .conn-card-body {
+      padding: 10px 14px;
+    }
+    .conn-section-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: #6e777b;
+      margin: 0 0 5px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      line-height: 1.2;
+    }
+    .conn-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px 12px;
+    }
+    .conn-field { display: flex; flex-direction: column; }
+    .conn-field label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #6e777b;
+      margin: 0 0 2px;
+      padding: 0;
+      line-height: 1.2;
+      display: block;
+    }
+    .conn-field input {
+      font-size: 13px;
+      line-height: 1.3;
+      height: auto;
+      min-height: unset;
+      border: none;
+      border-bottom: 1px solid #b3b9be;
+      border-radius: 0;
+      padding: 2px 2px;
+      background: transparent;
+      color: #2b2b2b;
+      outline: none;
+      width: 100%;
+      box-sizing: border-box;
+      box-shadow: none;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .conn-field input:focus { border-bottom-color: #0072a3; }
+    .conn-divider {
+      border: none;
+      border-top: 1px solid #dfe3e6;
+      margin: 8px 0;
+    }
+    .conn-actions { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+  </style>
+</head>
+
+<body x-data="app()" @fix-step.window="handleFixStep($event.detail)">
+
+  <!-- ═══════════════════════════════════════════════════════════
+       Clarity App Shell
+       ═══════════════════════════════════════════════════════════ -->
+  <div class="main-container open">
+
+    <!-- ── Header ──────────────────────────────────────────────── -->
+    <header class="header header-6">
+      <div class="branding">
+        <a href="#" class="nav-link" style="text-decoration:none;">
+          <i class="fas fa-cubes clr-icon" style="font-size:1.15rem; margin-right:0.4rem;"></i>
+          <span class="title">vSphere Supervisor Readiness Check + Installation</span>
+        </a>
+      </div>
+    </header>
+
+    <div class="content-container">
+      <main class="content-area">
+        <div class="app-content">
+
+          <!-- ── Connection Card ──────────────────────────────────── -->
+          <div class="conn-card">
+            <div class="conn-card-header">
+              <i class="fas fa-plug" style="color:#0072a3; font-size:0.78rem;"></i>
+              Connection Details
+            </div>
+            <div class="conn-card-body">
+
+              <!-- vCenter section -->
+              <div class="conn-section-label">
+                <i class="fas fa-server"></i> vCenter
+              </div>
+              <div class="conn-grid">
+                <div class="conn-field">
+                  <label>vCenter IP / FQDN</label>
+                  <input type="text" x-model="form.vc_url" @keydown.enter="checkInstalled()">
+                </div>
+                <div class="conn-field">
+                  <label>Username</label>
+                  <input type="text" x-model="form.username" placeholder="administrator@vsphere.local">
+                </div>
+                <div class="conn-field" style="position:relative;">
+                  <label>Password</label>
+                  <input :type="showPwd ? 'text' : 'password'" x-model="form.password"
+                         @keydown.enter="checkInstalled()" style="padding-right:18px;">
+                  <button @click="showPwd = !showPwd" type="button"
+                          style="position:absolute;right:2px;bottom:3px;background:none;border:none;cursor:pointer;padding:0;line-height:1;">
+                    <i :class="showPwd ? 'fas fa-eye-slash' : 'fas fa-eye'"
+                       style="color:#6e777b; font-size:11px;"></i>
+                  </button>
+                </div>
+              </div>
+
+              <hr class="conn-divider">
+
+              <!-- NSX section -->
+              <div class="conn-section-label">
+                <i class="fas fa-network-wired"></i> NSX
+              </div>
+              <div class="conn-grid">
+                <div class="conn-field">
+                  <label>NSX IP / FQDN</label>
+                  <input type="text" x-model="form.nsx_url">
+                </div>
+                <div class="conn-field">
+                  <label>NSX Username</label>
+                  <input type="text" x-model="form.nsx_user" placeholder="admin">
+                </div>
+                <div class="conn-field">
+                  <label>NSX Password</label>
+                  <input type="password" x-model="form.nsx_pass">
+                </div>
+              </div>
+
+              <!-- Action buttons -->
+              <div class="conn-actions">
+                <button @click="checkInstalled()"
+                        :disabled="loading || !form.vc_url || !form.password"
+                        class="btn btn-primary btn-sm">
+                  <i :class="loadingInstalled ? 'fas fa-circle-notch fa-spin' : 'fas fa-magnifying-glass'"></i>
+                  <span x-text="loadingInstalled ? 'Checking…' : 'Check if Supervisor is Installed'"></span>
+                </button>
+
+                <button @click="checkRequirements()" x-show="showReqBtn" x-cloak
+                        :disabled="loading" class="btn btn-success btn-sm fade-in">
+                  <i :class="loadingReq ? 'fas fa-circle-notch fa-spin' : 'fas fa-clipboard-check'"></i>
+                  <span x-text="loadingReq ? 'Checking…' : 'Check Supervisor Requirements'"></span>
+                </button>
+
+                <button x-show="installResult || hasResults()" @click="reset()"
+                        class="btn btn-outline btn-sm">
+                  <i class="fas fa-rotate-left"></i> Reset
+                </button>
+              </div>
+
+            </div><!-- /conn-card-body -->
+          </div><!-- /conn-card -->
+
+          <!-- ── Supervisor Status Card ──────────────────────────── -->
+          <div x-show="installResult" x-cloak class="fade-in" style="margin-bottom:1.2rem;">
+            <template x-if="installResult">
+              <div class="card"
+                   :style="installResult.error ? 'border-left:4px solid #c21d00' :
+                           !installResult.installed ? 'border-left:4px solid #e07400' :
+                           (installResult.clusters[0] && installResult.clusters[0].config_status === 'RUNNING') ? 'border-left:4px solid #48960c' :
+                           (installResult.clusters[0] && installResult.clusters[0].config_status === 'ERROR')   ? 'border-left:4px solid #c21d00' :
+                           'border-left:4px solid #e07400'">
+                <div class="card-header"
+                     :class="installResult.error ? 'clr-error' :
+                             !installResult.installed ? 'clr-warn' :
+                             (installResult.clusters[0] && installResult.clusters[0].config_status === 'RUNNING') ? 'clr-ok' :
+                             (installResult.clusters[0] && installResult.clusters[0].config_status === 'ERROR')   ? 'clr-error' :
+                             'clr-warn'">
+                  <i :class="installResult.error ? 'fas fa-circle-xmark' :
+                             !installResult.installed ? 'fas fa-circle-minus' :
+                             (installResult.clusters[0] && installResult.clusters[0].config_status === 'RUNNING') ? 'fas fa-circle-check' :
+                             (installResult.clusters[0] && installResult.clusters[0].config_status === 'ERROR')   ? 'fas fa-circle-xmark' :
+                             'fas fa-circle-notch fa-spin'"
+                     style="font-size:0.9rem;"></i>
+                  <span x-text="installResult.error ? 'Authentication Failed' :
+                        !installResult.installed
+                          ? 'Supervisor is NOT Installed'
+                          : 'Supervisor ' + (installResult.clusters[0]
+                              ? (installResult.clusters[0].supervisor || installResult.clusters[0].cluster_name || installResult.clusters[0].cluster || '')
+                              : '') + ' is ' + (installResult.clusters[0] && installResult.clusters[0].config_status === 'RUNNING'
+                              ? 'INSTALLED'
+                              : (installResult.clusters[0] && installResult.clusters[0].config_status || 'PRESENT'))"></span>
+                </div>
+                <div class="card-block">
+                  <!-- Error -->
+                  <template x-if="installResult.error">
+                    <div class="alert alert-danger alert-sm">
+                      <div class="alert-items"><div class="alert-item static">
+                        <span class="alert-text" x-text="installResult.error"></span>
+                      </div></div>
+                    </div>
+                  </template>
+
+                  <!-- Installed clusters -->
+                  <template x-if="installResult.installed && installResult.clusters.length">
+                    <div>
+                      <template x-for="c in installResult.clusters" :key="c.cluster || c.supervisor">
+                        <div style="background:#f3f6fa; border:1px solid #dfe3e6; border-radius:3px; padding:0.75rem; margin-bottom:0.5rem;">
+                          <div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.25rem;">
+                            <span style="font-weight:600; color:#2b2b2b;" x-text="c.cluster || c.supervisor"></span>
+                            <span class="status-chip"
+                                  :class="c.config_status === 'RUNNING' ? 'running' :
+                                          c.config_status === 'CONFIGURING' ? 'configuring' : 'error'"
+                                  x-text="c.config_status || 'UNKNOWN'"></span>
+                            <!-- network_mode badge (backend-enriched) -->
+                            <span x-show="c.network_mode"
+                                  :style="c.network_mode === 'NSX-VPC Distributed' ? 'background:#e8f5e9;color:#1b5e20;border:1px solid #a5d6a7;' :
+                                          c.network_mode === 'NSX-VPC Centralized' ? 'background:#e3f2fd;color:#0d47a1;border:1px solid #90caf9;' :
+                                          c.network_mode === 'VDS / FLB'           ? 'background:#f3e5f5;color:#4a148c;border:1px solid #ce93d8;' :
+                                          c.network_mode === 'NSX-T (Legacy)'      ? 'background:#fff3e0;color:#e65100;border:1px solid #ffcc80;' :
+                                          'background:#f5f5f5;color:#616161;border:1px solid #bdbdbd;'"
+                                  style="font-size:0.7rem;font-weight:600;padding:1px 7px;border-radius:10px;"
+                                  x-text="c.network_mode"></span>
+                            <!-- NSX access warning when mode can't be determined -->
+                            <span x-show="c.network_mode_warning"
+                                  style="font-size:0.7rem;color:#c21d00;display:flex;align-items:center;gap:3px;">
+                              <i class="fas fa-triangle-exclamation" style="font-size:0.65rem;"></i>
+                              <span x-text="c.network_mode_warning"></span>
+                            </span>
+                          </div>
+                          <template x-if="c.api_server_cluster_endpoint">
+                            <p style="font-size:0.8rem; color:#4a5568;">
+                              Kubernetes Control Plane VIP: <span style="font-family:monospace;" x-text="c.api_server_cluster_endpoint"></span>
+                            </p>
+                          </template>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+
+                  <!-- Not installed -->
+                  <template x-if="!installResult.error && !installResult.installed">
+                    <div>
+                      <p style="font-size:0.85rem; color:#4a5568;">
+                        No Supervisor found on this vCenter. Use <strong>Check Supervisor Requirements</strong> to validate prerequisites.
+                      </p>
+                      <template x-if="installResult.auth_user">
+                        <p style="font-size:0.72rem; color:#6e777b; margin-top:0.25rem;">
+                          Authenticated as: <span style="font-family:monospace;" x-text="installResult.auth_user"></span>
+                        </p>
+                      </template>
+                      <template x-if="installResult.capability">
+                        <div style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-top:0.75rem;">
+                          <span class="label" :class="installResult.capability.namespaces_supported ? 'label-success' : 'label-danger'">
+                            <i :class="installResult.capability.namespaces_supported ? 'fas fa-check' : 'fas fa-times'" style="margin-right:0.2rem;"></i>
+                            Namespaces supported
+                          </span>
+                          <span class="label" :class="installResult.capability.namespaces_licensed ? 'label-success' : 'label-warning'">
+                            <i :class="installResult.capability.namespaces_licensed ? 'fas fa-check' : 'fas fa-exclamation'" style="margin-right:0.2rem;"></i>
+                            <span x-text="installResult.capability.namespaces_licensed ? 'Licensed' : 'Unlicensed (OK in VCF 9.1)'"></span>
+                          </span>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <!-- ── Deployment Options Info (when Supervisor is RUNNING) ──── -->
+          <template x-if="installResult && installResult.installed && installResult.clusters.length">
+            <div class="fade-in" style="margin-bottom:1.2rem;">
+              <!-- Section title + toggle -->
+              <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.65rem;">
+                <span style="font-size:0.82rem; font-weight:600; color:#2b2b2b;">
+                  <i class="fas fa-table-columns" style="color:#0072a3; margin-right:0.35rem;"></i>
+                  Deployment Options — Pros / Cons / Requirements
+                </span>
+                <button @click="showModeInfo = !showModeInfo"
+                        class="btn btn-sm btn-link" style="font-size:0.75rem; color:#0072a3; padding:0; border:none; background:none; cursor:pointer;">
+                  <i :class="showModeInfo ? 'fas fa-chevron-up' : 'fas fa-chevron-down'" style="margin-right:0.2rem;"></i>
+                  <span x-text="showModeInfo ? 'Hide' : 'Show'"></span>
+                </button>
+              </div>
+
+              <!-- 3 columns — only Pros/Cons/Requirements, no steps, no deploy -->
+              <div x-show="showModeInfo" class="req-cols">
+                <template x-for="col in [
+                  { key: 'distributed', label: 'NSX-VPC\u00a0Distributed', badge: 'Simple \u00b7 Recommended', icon: 'fa-network-wired', mode: 'NSX-VPC Distributed' },
+                  { key: 'centralized', label: 'NSX-VPC\u00a0Centralized', badge: 'Advanced',                  icon: 'fa-circle-nodes',  mode: 'NSX-VPC Centralized' },
+                  { key: 'vds_flb',     label: 'VDS\u00a0/\u00a0FLB',      badge: 'No NSX',                    icon: 'fa-ethernet',      mode: 'VDS / FLB'          }
+                ]" :key="col.key">
+                  <div class="card" style="display:flex; flex-direction:column;"
+                       :style="installResult.clusters.some(c => c.network_mode === col.mode)
+                               ? 'border:2px solid #0072a3; box-shadow:0 0 0 3px rgba(0,114,163,.1);'
+                               : ''">
+
+                    <!-- Column header: title row + badge row -->
+                    <div class="card-header" style="justify-content:space-between; align-items:flex-start;">
+                      <div>
+                        <div style="display:flex; align-items:center; gap:0.4rem;">
+                          <i :class="'fas ' + col.icon" style="color:#0072a3; font-size:0.75rem; flex-shrink:0;"></i>
+                          <span style="font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.03em;" x-text="col.label"></span>
+                        </div>
+                        <div style="margin-top:4px;">
+                          <span class="label" style="font-size:0.58rem; padding:0.1rem 0.35rem;" x-text="col.badge"></span>
+                        </div>
+                      </div>
+                      <!-- "In use" state badge -->
+                      <span x-show="installResult.clusters.some(c => c.network_mode === col.mode)"
+                            :style="installResult.clusters.some(c => c.config_status === 'RUNNING') ?
+                                    'background:#0072a3;color:#fff;font-size:0.65rem;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;flex-shrink:0;margin-top:2px;' :
+                                    'background:#6e777b;color:#fff;font-size:0.65rem;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;flex-shrink:0;margin-top:2px;'"
+                            x-text="installResult.clusters.some(c => c.config_status === 'RUNNING') ? '✓ In Use' :
+                                    installResult.clusters.some(c => c.config_status === 'REMOVING') ? '↓ Removing' :
+                                    installResult.clusters.some(c => c.config_status === 'CONFIGURING') ? '↑ Deploying' :
+                                    '✓ Was In Use'">
+                      </span>
+                    </div>
+
+                    <!-- Pros / Cons / Requirements -->
+                    <div class="pros-cons-section">
+
+                      <!-- Distributed -->
+                      <div x-show="col.key === 'distributed'">
+                        <div class="pc-label">Pros</div>
+                        <div class="pc-item">· Simple design - No Edge Node / Tier-0 / BGP</div>
+                        <div class="pc-item">· Full VCF-Automation support</div>
+                        <div class="pc-item">· Fewer physical fabric IP consumption - K8s nodes use logical private IPs</div>
+                        <div class="pc-item">· More secure - No direct access to K8s nodes</div>
+                        <div class="pc-label pc-label-gap">Requirements</div>
+                        <div class="pc-item">· All ESXi hosts need L2 (VLAN) connectivity to the fabric</div>
+                        <div class="pc-item">· Physical fabric MTU &ge; 1700</div>
+                      </div>
+
+                      <!-- Centralized -->
+                      <div x-show="col.key === 'centralized'">
+                        <div class="pc-label">Pros</div>
+                        <div class="pc-item">· Full VCF-Automation support</div>
+                        <div class="pc-item">· Fewer physical fabric IP consumption - K8s nodes use logical private IPs</div>
+                        <div class="pc-item">· More secure - No direct access to K8s nodes</div>
+                        <div class="pc-label pc-label-gap">Requirements</div>
+                        <div class="pc-item">· Physical fabric MTU &ge; 1700</div>
+                      </div>
+
+                      <!-- VDS / FLB -->
+                      <div x-show="col.key === 'vds_flb'">
+                        <div class="pc-label">Pros</div>
+                        <div class="pc-item">· Simple design — no NSX required</div>
+                        <div class="pc-label pc-label-gap pc-label-cons">Cons</div>
+                        <div class="pc-item">· Very limited VCF-Automation support</div>
+                        <div class="pc-item">· Limited network services (No Subnets, Static Routes, NAT)</div>
+                        <div class="pc-item">· Less secure - Direct access to K8s nodes</div>
+                        <div class="pc-label pc-label-gap">Requirements</div>
+                        <div class="pc-item">· All ESXi hosts need L2 (VLAN) connectivity to the fabric</div>
+                      </div>
+
+                    </div><!-- /pros-cons-section -->
+                  </div><!-- /card -->
+                </template>
+              </div><!-- /req-cols -->
+            </div>
+          </template>
+
+          <!-- ── Requirements Results ───────────────────────────── -->
+          <div x-show="hasResults()" x-cloak class="fade-in">
+            <div class="req-cols">
+              <template x-for="col in [
+                { key: 'distributed', label: 'NSX-VPC Distributed', badge: 'Simple \u00b7 Recommended', icon: 'fa-network-wired' },
+                { key: 'centralized', label: 'NSX-VPC Centralized', badge: 'Advanced',                  icon: 'fa-circle-nodes'  },
+                { key: 'vds_flb',     label: 'VDS / FLB',           badge: 'No NSX',                    icon: 'fa-ethernet'      }
+              ]" :key="col.key">
+                <div class="card" style="display:flex; flex-direction:column; height:100%;">
+
+                  <!-- Column header: title row + badge row -->
+                  <div class="card-header" style="justify-content:space-between; align-items:flex-start;">
+                    <div>
+                      <div style="display:flex; align-items:center; gap:0.4rem;">
+                        <i :class="'fas ' + col.icon" style="color:#0072a3; font-size:0.75rem; flex-shrink:0;"></i>
+                        <span style="font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:.03em;" x-text="col.label"></span>
+                      </div>
+                      <div style="margin-top:4px;">
+                        <span class="label" style="font-size:0.58rem; padding:0.1rem 0.35rem;" x-text="col.badge"></span>
+                      </div>
+                    </div>
+                    <span class="status-chip"
+                          :class="{
+                            'ready':    overallFor(col.key) === 'ready',
+                            'warnings': overallFor(col.key) === 'warnings',
+                            'issues':   overallFor(col.key) === 'issues'
+                          }"
+                          x-text="{ ready:'Ready', warnings:'Warnings', issues:'Issues' }[overallFor(col.key)] || ''">
+                    </span>
+                  </div>
+
+                  <!-- Pros / Cons / Requirements -->
+                  <div class="pros-cons-section">
+                    <!-- Distributed -->
+                    <div x-show="col.key === 'distributed'">
+                      <div class="pc-label">Pros</div>
+                      <div class="pc-item">· Simple design - No Edge Node / Tier-0 / BGP</div>
+                      <div class="pc-item">· Full VCF-Automation support</div>
+                      <div class="pc-item">· Fewer physical fabric IP consumption - K8s nodes use logical private IPs</div>
+                      <div class="pc-item">· More secure - No direct access to K8s nodes</div>
+                      <div class="pc-label pc-label-gap">Requirements</div>
+                      <div class="pc-item">· All ESXi hosts need L2 (VLAN) connectivity to the fabric</div>
+                      <div class="pc-item">· Physical fabric MTU &ge; 1700</div>
+                    </div>
+                    <!-- Centralized -->
+                    <div x-show="col.key === 'centralized'">
+                      <div class="pc-label">Pros</div>
+                      <div class="pc-item">· Full VCF-Automation support</div>
+                      <div class="pc-item">· Fewer physical fabric IP consumption - K8s nodes use logical private IPs</div>
+                      <div class="pc-item">· More secure - No direct access to K8s nodes</div>
+                      <div class="pc-label pc-label-gap">Requirements</div>
+                      <div class="pc-item">· Physical fabric MTU &ge; 1700</div>
+                    </div>
+                    <!-- VDS / FLB -->
+                    <div x-show="col.key === 'vds_flb'">
+                      <div class="pc-label">Pros</div>
+                      <div class="pc-item">· Simple design — no NSX required</div>
+                      <div class="pc-label pc-label-gap pc-label-cons">Cons</div>
+                      <div class="pc-item">· Very limited VCF-Automation support</div>
+                      <div class="pc-item">· Limited network services (No Subnets, Static Routes, NAT)</div>
+                      <div class="pc-item">· Less secure - Direct access to K8s nodes</div>
+                      <div class="pc-label pc-label-gap">Requirements</div>
+                      <div class="pc-item">· All ESXi hosts need L2 (VLAN) connectivity to the fabric</div>
+                    </div>
+                  </div>
+
+                  <!-- Check rows -->
+                  <div style="flex:1;">
+                    <template x-for="(check, idx) in (modes[col.key] || [])" :key="col.key + '-' + idx">
+                      <div>
+                        <!-- Row header (click to expand) -->
+                        <div @click="check.details && (check.expanded = !check.expanded)"
+                             class="step-row"
+                             :class="check.details ? 'clickable' : 'no-click'">
+
+                          <!-- Status icon -->
+                          <span style="flex-shrink:0; width:1rem; text-align:center; margin-top:0.1rem;">
+                            <i class="fas fa-check-circle clr-ok"           style="font-size:0.75rem;" x-show="check.status==='ok'"></i>
+                            <i class="fas fa-triangle-exclamation clr-warn" style="font-size:0.75rem;" x-show="check.status==='warning'"></i>
+                            <i class="fas fa-circle-xmark clr-error"        style="font-size:0.75rem;" x-show="check.status==='error'"></i>
+                            <i class="fas fa-circle-minus clr-info"         style="font-size:0.75rem;" x-show="check.status==='info'"></i>
+                          </span>
+
+                          <!-- Step badge + name + message -->
+                          <div style="flex:1; min-width:0;">
+                            <div style="display:flex; align-items:center; gap:0.35rem; flex-wrap:wrap;">
+                              <span class="step-badge" x-text="check.step === 'Auth' ? 'Auth' : 'S' + check.step"></span>
+                              <p style="font-weight:700; font-size:0.85rem; color:#2b2b2b; line-height:1.3; margin:0;"
+                                 x-text="check.name"></p>
+                            </div>
+                            <p style="font-size:0.72rem; margin:0.12rem 0 0 1.5rem; line-height:1.3;"
+                               :class="{ 'clr-ok': check.status==='ok', 'clr-warn': check.status==='warning', 'clr-error': check.status==='error', 'clr-info': check.status==='info' }"
+                               x-text="check.message"></p>
+                          </div>
+
+                          <!-- Fix button -->
+                          <button x-show="check.can_fix && check.status === 'error'"
+                                  @click.stop="check.expanded = true; $dispatch('fix-step', {step: check.step, mode: col.key})"
+                                  class="fix-badge">Fix</button>
+
+                          <!-- Chevron -->
+                          <span x-show="check.details" class="chevron" :class="check.expanded ? 'open' : ''">
+                            <i class="fas fa-chevron-down"></i>
+                          </span>
+                        </div>
+
+                        <!-- Details drawer -->
+                        <div x-show="check.expanded && check.details" x-transition.opacity
+                             class="step-details"
+                             :style="{
+                               background: check.status==='ok' ? '#f3fbf0' : check.status==='warning' ? '#fdf7f0' : check.status==='error' ? '#fdf0f0' : '#f3f6fa',
+                               'border-top-color': check.status==='ok' ? '#c6e8ae' : check.status==='warning' ? '#f5d898' : check.status==='error' ? '#f5c2c2' : '#dfe3e6'
+                             }">
+                          <pre style="white-space:pre-wrap; overflow-x:auto; font-size:0.72rem; color:#4a5568; margin:0;" x-text="check.details"></pre>
+                          <template x-if="check.link">
+                            <p style="margin-top:0.5rem; font-size:0.72rem;">
+                              See <a :href="check.link.url" target="_blank" rel="noopener"
+                                     style="color:#0072a3; text-decoration:underline;"
+                                     x-text="check.link.text"></a>.
+                            </p>
+                          </template>
+                        </div>
+
+                      </div>
+                    </template>
+                  </div>
+
+                  <!-- Column footer -->
+                  <div class="card-footer">
+                    <p style="font-size:0.75rem; font-weight:600; margin:0;"
+                       :class="{ 'clr-ok': overallFor(col.key)==='ready', 'clr-warn': overallFor(col.key)==='warnings', 'clr-error': overallFor(col.key)==='issues' }"
+                       x-text="{ ready:'All requirements met', warnings:'Review warnings', issues:'Requirements missing' }[overallFor(col.key)] || ''">
+                    </p>
+                    <!-- VDS/FLB: always disabled -->
+                    <template x-if="showReqBtn && col.key === 'vds_flb'">
+                      <div style="display:flex; flex-direction:column; align-items:flex-end; gap:0.2rem;">
+                        <button disabled class="btn btn-sm"
+                                style="opacity:0.45; cursor:not-allowed; background:#dfe3e6; color:#6e777b; border:none;">
+                          <i class="fas fa-rocket" style="font-size:0.68rem;"></i> Deploy
+                        </button>
+                        <span style="font-size:0.62rem; color:#6e777b;">Not supported by this tool</span>
+                      </div>
+                    </template>
+                    <!-- NSX modes: active / greyed -->
+                    <template x-if="showReqBtn && col.key !== 'vds_flb'">
+                      <button
+                        :disabled="overallFor(col.key) === 'issues'"
+                        @click="overallFor(col.key) !== 'issues' && startInstallWizard(col.key)"
+                        class="btn btn-sm"
+                        :class="overallFor(col.key) === 'issues' ? '' : 'btn-primary'"
+                        :style="overallFor(col.key) === 'issues' ? 'opacity:0.45; cursor:not-allowed; background:#dfe3e6; color:#6e777b; border:none;' : ''">
+                        <i class="fas fa-rocket" style="font-size:0.68rem;"></i> Deploy
+                      </button>
+                    </template>
+                  </div>
+
+                </div><!-- /card -->
+              </template>
+            </div><!-- /req-cols -->
+          </div><!-- /requirements results -->
+
+          <!-- ── Deploy Wizard ──────────────────────────────────── -->
+          <div x-show="showInstallWizard" x-cloak class="fade-in" style="margin-top:1.2rem;">
+            <div class="card" style="border-top:3px solid #0072a3;">
+
+              <!-- Wizard header -->
+              <div class="card-header" style="background:#f3f6fa; justify-content:space-between; padding:0.85rem 1rem;">
+                <div style="display:flex; align-items:center; gap:0.5rem;">
+                  <i class="fas fa-rocket" style="color:#0072a3;"></i>
+                  <span style="font-weight:700; font-size:0.82rem; text-transform:uppercase; letter-spacing:.03em;">
+                    Deploy Supervisor — NSX VPC Mode
+                  </span>
+                </div>
+                <button @click="showInstallWizard = false; wizardStep = 0" type="button"
+                        style="background:none; border:none; cursor:pointer; color:#6e777b; font-size:1rem; padding:0;">
+                  <i class="fas fa-times"></i>
+                </button>
+              </div>
+
+              <!-- Step indicator (1-5) -->
+              <div x-show="wizardStep >= 1 && wizardStep <= 5"
+                   style="padding:0.9rem 1rem 0.5rem; border-bottom:1px solid #dfe3e6;">
+                <div style="display:flex; align-items:center; font-size:0.72rem;">
+                  <template x-for="(label, idx) in ['Cluster','Network','Storage','Config','Review']" :key="idx">
+                    <div style="display:flex; align-items:center;">
+                      <div style="display:flex; align-items:center; gap:0.35rem;">
+                        <div class="wiz-dot"
+                             :class="{ active: wizardStep===idx+1, done: wizardStep>idx+1, pending: wizardStep<idx+1 }"
+                             x-text="wizardStep > idx+1 ? '✓' : (idx+1)"></div>
+                        <span :style="{ color: wizardStep===idx+1 ? '#0072a3' : wizardStep>idx+1 ? '#48960c' : '#6e777b',
+                                        'font-weight': wizardStep===idx+1 ? '700' : '400' }"
+                              x-text="label"></span>
+                      </div>
+                      <span x-show="idx < 4" style="color:#c5c8ca; margin:0 0.45rem; font-size:1rem;">›</span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+              <!-- Step 0: Discovering -->
+              <div x-show="wizardStep === 0"
+                   style="padding:1.5rem; display:flex; align-items:center; gap:0.75rem; color:#4a5568;">
+                <i class="fas fa-circle-notch fa-spin" style="color:#0072a3;"></i>
+                <span>Discovering environment options…</span>
+              </div>
+
+              <!-- Step 1: Cluster -->
+              <div x-show="wizardStep === 1" style="padding:1.1rem;">
+                <p style="font-size:0.85rem; font-weight:500; color:#2b2b2b; margin-bottom:0.9rem;">
+                  Select the compute cluster for the Supervisor control plane:
+                </p>
+                <template x-if="wizardOptions && wizardOptions.error">
+                  <div class="alert alert-danger alert-sm" style="margin-bottom:0.75rem;">
+                    <div class="alert-items"><div class="alert-item static">
+                      <span class="alert-text" x-text="wizardOptions.error"></span>
+                    </div></div>
+                  </div>
+                </template>
+                <div>
+                  <template x-for="c in (wizardOptions ? wizardOptions.clusters : [])" :key="c.cluster">
+                    <div @click="wizardConfig.cluster_moref = c.cluster; wizardConfig.cluster_name = c.name"
+                         class="sel-row"
+                         :class="wizardConfig.cluster_moref === c.cluster ? 'selected' : ''">
+                      <div class="radio-dot"
+                           :class="wizardConfig.cluster_moref === c.cluster ? 'selected' : ''"></div>
+                      <i class="fas fa-server" style="color:#6e777b; font-size:0.82rem; flex-shrink:0;"></i>
+                      <div style="flex:1; min-width:0;">
+                        <span style="font-weight:600; font-size:0.85rem; color:#2b2b2b;" x-text="c.name"></span>
+                        <span style="margin-left:0.5rem; font-size:0.68rem; color:#6e777b; font-family:monospace;" x-text="c.cluster"></span>
+                      </div>
+                      <div style="display:flex; gap:0.65rem; font-size:0.72rem; flex-shrink:0;">
+                        <span :style="{ color: c.ha_enabled === false ? '#c21d00' : '#48960c' }">
+                          <i :class="c.ha_enabled === false ? 'fas fa-times' : 'fas fa-check'"></i> HA
+                        </span>
+                        <span :style="{ color: c.drs_enabled === false ? '#e07400' : '#48960c' }">
+                          <i :class="c.drs_enabled === false ? 'fas fa-exclamation' : 'fas fa-check'"></i> DRS
+                        </span>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+                <p style="font-size:0.72rem; color:#6e777b; margin-top:0.7rem;">
+                  <i class="fas fa-circle-info" style="color:#0072a3; margin-right:0.25rem;"></i>
+                  HA and DRS are required. If disabled, they will be enabled automatically before deployment.
+                </p>
+              </div>
+
+              <!-- Step 2: Network -->
+              <div x-show="wizardStep === 2" style="padding:1.1rem;">
+
+                <div style="background:#f3f6fa; border:1px solid #dfe3e6; border-radius:3px; padding:0.9rem; margin-bottom:1.1rem;">
+                  <p style="font-size:0.65rem; font-weight:700; text-transform:uppercase; color:#6e777b; margin-bottom:0.7rem;">NSX Workload Network</p>
+
+                  <template x-if="!(wizardOptions && wizardOptions.valid_nsx_projects && wizardOptions.valid_nsx_projects.length)">
+                    <div class="alert alert-warning alert-sm" style="margin-bottom:0.7rem;">
+                      <div class="alert-items"><div class="alert-item static">
+                        <span class="alert-text">No valid NSX Project found. Ensure Step 7 (Distributed VPC Connectivity Profile) is green before deploying.</span>
+                      </div></div>
+                    </div>
+                  </template>
+
+                  <div class="clr-row">
+                    <div class="clr-col-12 clr-col-md-6">
+                      <div class="clr-form-control" style="margin-bottom:0.7rem;">
+                        <label class="clr-control-label" style="font-size:0.68rem;">NSX Project</label>
+                        <div class="clr-control-container"><div class="clr-select-wrapper">
+                          <select x-model="wizardConfig.nsx_project_path" @change="wizardProjectChanged()" class="clr-select">
+                            <option value="">— Select NSX Project —</option>
+                            <template x-for="proj in ((wizardOptions || {}).valid_nsx_projects || [])" :key="proj.path">
+                              <option :value="proj.path"
+                                      :selected="proj.path === wizardConfig.nsx_project_path"
+                                      x-text="proj.display_name"></option>
+                            </template>
+                          </select>
+                        </div></div>
+                      </div>
+                    </div>
+                    <div class="clr-col-12 clr-col-md-6">
+                      <div class="clr-form-control" style="margin-bottom:0.7rem;">
+                        <label class="clr-control-label" style="font-size:0.68rem;">VPC Connectivity Profile</label>
+                        <div class="clr-control-container"><div class="clr-select-wrapper">
+                          <select x-model="wizardConfig.vpc_connectivity_profile_path" @change="wizardProfileChanged()" class="clr-select">
+                            <option value="">— Select Profile —</option>
+                            <template x-for="prof in wizardGetProfiles()" :key="prof.path">
+                              <option :value="prof.path"
+                                      :selected="prof.path === wizardConfig.vpc_connectivity_profile_path"
+                                      x-text="prof.display_name"></option>
+                            </template>
+                          </select>
+                        </div></div>
+                        <p style="font-size:0.62rem; color:#6e777b; margin-top:0.2rem;">Only profiles with all S7 requirements met are listed.</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <p style="font-size:0.85rem; font-weight:500; color:#2b2b2b; margin-bottom:0.9rem;">
+                  Configure the Supervisor management network:
+                </p>
+
+                <div class="clr-form-control" style="margin-bottom:0.7rem;">
+                  <label class="clr-control-label" style="font-size:0.68rem;">Management Port Group (Distributed)</label>
+                  <div class="clr-control-container"><div class="clr-select-wrapper">
+                    <select x-model="wizardConfig.port_group_id" class="clr-select">
+                      <option value="">— Select port group —</option>
+                      <template x-for="pg in (wizardOptions ? wizardOptions.port_groups : [])" :key="pg.network">
+                        <option :value="pg.network" x-text="pg.name + ' (' + pg.network + ')'"></option>
+                      </template>
+                    </select>
+                  </div></div>
+                </div>
+
+                <div class="clr-row">
+                  <div class="clr-col-12 clr-col-md-6">
+                    <div class="clr-form-control" style="margin-bottom:0.7rem;">
+                      <label class="clr-control-label" style="font-size:0.68rem;">First of 5 Control-Plane IPs</label>
+                      <div class="clr-control-container"><div class="clr-input-wrapper">
+                        <input type="text" x-model="wizardConfig.first_ip" placeholder="10.1.1.85-10.1.1.89" class="clr-input">
+                      </div></div>
+                      <p style="font-size:0.62rem; color:#6e777b; margin-top:0.2rem;">Enter the first IP or the full range — 5 consecutive IPs will be reserved</p>
+                    </div>
+                  </div>
+                  <div class="clr-col-12 clr-col-md-6">
+                    <div class="clr-form-control" style="margin-bottom:0.7rem;">
+                      <label class="clr-control-label" style="font-size:0.68rem;">Gateway (IP/prefix)</label>
+                      <div class="clr-control-container"><div class="clr-input-wrapper">
+                        <input type="text" x-model="wizardConfig.gateway_cidr" placeholder="10.1.1.1/24" class="clr-input">
+                      </div></div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="clr-form-control" style="margin-bottom:0.7rem;">
+                  <label class="clr-control-label" style="font-size:0.68rem;">DNS Servers <span style="font-weight:400; text-transform:none;">(comma-separated)</span></label>
+                  <div class="clr-control-container"><div class="clr-input-wrapper">
+                    <input type="text" x-model="wizardConfig.dns_servers" placeholder="10.1.1.10, 10.1.1.11" class="clr-input">
+                  </div></div>
+                </div>
+
+                <div class="clr-row">
+                  <div class="clr-col-12 clr-col-md-6">
+                    <div class="clr-form-control" style="margin-bottom:0.7rem;">
+                      <label class="clr-control-label" style="font-size:0.68rem;">Search Domain(s)</label>
+                      <div class="clr-control-container"><div class="clr-input-wrapper">
+                        <input type="text" x-model="wizardConfig.search_domains" placeholder="site-a.vcf.lab" class="clr-input">
+                      </div></div>
+                    </div>
+                  </div>
+                  <div class="clr-col-12 clr-col-md-6">
+                    <div class="clr-form-control" style="margin-bottom:0.7rem;">
+                      <label class="clr-control-label" style="font-size:0.68rem;">NTP Servers</label>
+                      <div class="clr-control-container"><div class="clr-input-wrapper">
+                        <input type="text" x-model="wizardConfig.ntp_servers" placeholder="pool.ntp.org" class="clr-input">
+                      </div></div>
+                    </div>
+                  </div>
+                </div>
+              </div><!-- /step 2 -->
+
+              <!-- Step 3: Storage -->
+              <div x-show="wizardStep === 3" style="padding:1.1rem;">
+                <p style="font-size:0.85rem; font-weight:500; color:#2b2b2b; margin-bottom:0.7rem;">Select the storage policy for Supervisor control plane VMs:</p>
+                <div class="alert alert-warning alert-sm" style="margin-bottom:0.7rem;">
+                  <div class="alert-items"><div class="alert-item static">
+                    <span class="alert-text">
+                      Only policies compatible with datastores on <strong x-text="wizardConfig.cluster_name"></strong> are listed.
+                      An incompatible policy causes a silent EAM placement failure during deployment.
+                    </span>
+                  </div></div>
+                </div>
+                <div style="max-height:18rem; overflow-y:auto;">
+                  <template x-for="p in (wizardOptions ? wizardOptions.storage_policies : [])" :key="p.policy">
+                    <div @click="wizardConfig.storage_policy_uuid = p.policy; wizardConfig.storage_policy_name = p.name"
+                         class="sel-row"
+                         :class="wizardConfig.storage_policy_uuid === p.policy ? 'selected' : ''">
+                      <div class="radio-dot"
+                           :class="wizardConfig.storage_policy_uuid === p.policy ? 'selected' : ''"></div>
+                      <i class="fas fa-database" style="color:#6e777b; font-size:0.82rem; flex-shrink:0;"></i>
+                      <span style="font-weight:500; font-size:0.85rem; color:#2b2b2b;" x-text="p.name"></span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+              <!-- Step 4: Name & Size -->
+              <div x-show="wizardStep === 4" style="padding:1.1rem;">
+                <div class="clr-row">
+                  <div class="clr-col-12 clr-col-md-6">
+                    <div class="clr-form-control" style="margin-bottom:0.7rem;">
+                      <label class="clr-control-label" style="font-size:0.68rem;">Supervisor Name</label>
+                      <div class="clr-control-container"><div class="clr-input-wrapper">
+                        <input type="text" x-model="wizardConfig.name" placeholder="supervisor-wld01-a" class="clr-input">
+                      </div></div>
+                    </div>
+                  </div>
+                  <div class="clr-col-12 clr-col-md-6">
+                    <div class="clr-form-control" style="margin-bottom:0.7rem;">
+                      <label class="clr-control-label" style="font-size:0.68rem;">Control Plane Size</label>
+                      <div class="clr-control-container"><div class="clr-select-wrapper">
+                        <select x-model="wizardConfig.size" class="clr-select">
+                          <option value="TINY">TINY — 2 vCPU, 4 GB RAM</option>
+                          <option value="SMALL">SMALL — 4 vCPU, 8 GB RAM (recommended)</option>
+                          <option value="MEDIUM">MEDIUM — 8 vCPU, 16 GB RAM</option>
+                          <option value="LARGE">LARGE — 16 vCPU, 32 GB RAM</option>
+                        </select>
+                      </div></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="alert alert-info" style="margin-top:0.5rem;">
+                  <div class="alert-items"><div class="alert-item static">
+                    <span class="alert-text">
+                      <i class="fas fa-circle-info" style="margin-right:0.25rem;"></i>
+                      Workload network: <strong>NSX VPC mode</strong>
+                      &nbsp;·&nbsp; Service CIDR: <span style="font-family:monospace;">10.96.0.0/12</span>
+                      &nbsp;·&nbsp; Private workload CIDR: <span style="font-family:monospace;">172.30.0.0/16</span>
+                    </span>
+                  </div></div>
+                </div>
+              </div>
+
+              <!-- Step 5: Review -->
+              <div x-show="wizardStep === 5" style="padding:1.1rem;">
+                <p style="font-size:0.85rem; font-weight:600; color:#2b2b2b; margin-bottom:0.7rem;">Review before deploying:</p>
+                <div style="border:1px solid #dfe3e6; border-radius:3px; overflow:hidden;">
+                  <table class="review-tbl">
+                    <tbody>
+                      <template x-for="([k,v]) in [
+                          ['Name', wizardConfig.name],
+                          ['Cluster', wizardConfig.cluster_name + ' (' + wizardConfig.cluster_moref + ')'],
+                          ['Size', wizardConfig.size],
+                          ['NSX Project', wizardConfig.nsx_project_name],
+                          ['VPC Profile', wizardConfig.vpc_profile_name],
+                          ['Port Group', (wizardOptions ? (wizardOptions.port_groups.find(p=>p.network===wizardConfig.port_group_id)||{name:wizardConfig.port_group_id}).name : wizardConfig.port_group_id)],
+                          ['Control-Plane IPs', wizardConfig.first_ip + ' + 4 more (5 total)'],
+                          ['Gateway', wizardConfig.gateway_cidr],
+                          ['DNS', wizardConfig.dns_servers],
+                          ['Search Domain', wizardConfig.search_domains],
+                          ['NTP', wizardConfig.ntp_servers],
+                          ['Storage Policy', wizardConfig.storage_policy_name]
+                        ]" :key="k">
+                        <tr>
+                          <th x-text="k"></th>
+                          <td x-text="v"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Step 6: Deploying -->
+              <div x-show="wizardStep === 6" style="padding:1.1rem;">
+                <template x-if="!wizardResult">
+                  <div style="display:flex; align-items:center; gap:0.75rem; color:#4a5568;">
+                    <i class="fas fa-circle-notch fa-spin" style="color:#0072a3;"></i>
+                    <span>Submitting deployment request…</span>
+                  </div>
+                </template>
+
+                <template x-if="wizardResult && !wizardResult.success">
+                  <div class="alert alert-danger">
+                    <div class="alert-items"><div class="alert-item static">
+                      <span class="alert-text">Deployment failed: <span x-text="wizardResult.error"></span></span>
+                    </div></div>
+                  </div>
+                </template>
+
+                <template x-if="wizardResult && wizardResult.success">
+                  <div>
+                    <div class="alert alert-info" style="margin-bottom:0.9rem;">
+                      <div class="alert-items"><div class="alert-item static">
+                        <i class="fas fa-circle-notch fa-spin" style="color:#0072a3; margin-right:0.4rem;"></i>
+                        <span class="alert-text">
+                          Supervisor <strong x-text="wizardConfig.name || wizardResult.supervisor_id"></strong> is deploying…
+                        </span>
+                      </div></div>
+                    </div>
+
+                    <template x-if="deployStatus">
+                      <div style="background:#f3f6fa; border:1px solid #dfe3e6; border-radius:3px; padding:0.9rem;">
+                        <div style="display:flex; align-items:center; gap:0.75rem; margin-bottom:0.6rem;">
+                          <span style="font-size:0.65rem; font-weight:700; color:#6e777b; text-transform:uppercase; width:8rem;">Config Status</span>
+                          <span class="status-chip"
+                                :class="deployStatus.config_status === 'CONFIGURING' ? 'configuring' :
+                                        deployStatus.config_status === 'RUNNING' ? 'running' : 'error'"
+                                x-text="deployStatus.config_status || '…'"></span>
+                        </div>
+                        <template x-if="deployStatus.config_status && deployStatus.config_status !== 'CONFIGURING'">
+                          <div>
+                            <div style="display:flex; align-items:center; gap:0.75rem; margin-bottom:0.5rem;">
+                              <span style="font-size:0.65rem; font-weight:700; color:#6e777b; text-transform:uppercase; width:8rem;">K8s Status</span>
+                              <span style="font-size:0.8rem; color:#4a5568;" x-text="deployStatus.kubernetes_status || '—'"></span>
+                            </div>
+                            <template x-if="deployStatus.api_server_cluster_endpoint">
+                              <div style="display:flex; align-items:center; gap:0.75rem;">
+                                <span style="font-size:0.65rem; font-weight:700; color:#6e777b; text-transform:uppercase; width:8rem;">Control Plane VIP</span>
+                                <span style="font-family:monospace; font-weight:700; color:#0072a3; font-size:0.8rem;" x-text="deployStatus.api_server_cluster_endpoint"></span>
+                              </div>
+                            </template>
+                          </div>
+                        </template>
+                      </div>
+                    </template>
+
+                    <p style="font-size:0.72rem; color:#6e777b; margin-top:0.7rem;">
+                      <i class="fas fa-clock" style="margin-right:0.25rem;"></i>
+                      Typical deployment: 5–20 min for VMs, 20–60 min to RUNNING. Polling every 15 s.
+                    </p>
+                  </div>
+                </template>
+              </div>
+
+              <!-- Step 7: Done -->
+              <div x-show="wizardStep === 7" style="padding:1.1rem;">
+                <template x-if="deployStatus && deployStatus.config_status === 'RUNNING'">
+                  <div style="text-align:center; padding:1.8rem 0;">
+                    <div style="width:3.8rem; height:3.8rem; border-radius:50%; background:#dff0d0; display:flex; align-items:center; justify-content:center; margin:0 auto 0.9rem;">
+                      <i class="fas fa-circle-check" style="font-size:1.9rem; color:#48960c;"></i>
+                    </div>
+                    <h3 style="font-size:1.2rem; font-weight:700; color:#48960c; margin-bottom:0.45rem;">Supervisor is RUNNING!</h3>
+                    <p style="font-size:0.85rem; color:#4a5568;">
+                      Kubernetes Control Plane VIP:
+                      <span style="font-family:monospace; font-weight:700; color:#0072a3;" x-text="deployStatus.api_server_cluster_endpoint || '—'"></span>
+                    </p>
+                    <template x-if="deployStatus.api_servers && deployStatus.api_servers.length">
+                      <p style="font-size:0.72rem; color:#6e777b; margin-top:0.25rem;">
+                        Control plane VMs:
+                        <span style="font-family:monospace;" x-text="deployStatus.api_servers.map(s=>s.client_address||s).join(', ')"></span>
+                      </p>
+                    </template>
+                  </div>
+                </template>
+                <template x-if="deployStatus && deployStatus.config_status === 'ERROR'">
+                  <div class="alert alert-danger">
+                    <div class="alert-items"><div class="alert-item static">
+                      <span class="alert-text">
+                        Deployment reached ERROR state.
+                        To retry: disable Supervisor in vCenter UI, wait for REMOVING state to clear, then re-run.
+                      </span>
+                    </div></div>
+                  </div>
+                </template>
+              </div>
+
+              <!-- Wizard footer -->
+              <div class="card-footer">
+                <button x-show="wizardStep >= 2 && wizardStep <= 5"
+                        @click="wizardStep--" class="btn btn-outline btn-sm">
+                  <i class="fas fa-arrow-left" style="font-size:0.68rem; margin-right:0.2rem;"></i> Back
+                </button>
+                <div x-show="wizardStep < 2 || wizardStep > 5"></div>
+
+                <button x-show="wizardStep >= 1 && wizardStep < 5"
+                        @click="wizardAdvance()"
+                        :disabled="
+                          (wizardStep===1 && !wizardConfig.cluster_moref) ||
+                          (wizardStep===2 && (!wizardConfig.port_group_id || !wizardConfig.first_ip || !wizardConfig.gateway_cidr || !wizardConfig.dns_servers || !wizardConfig.nsx_project_path || !wizardConfig.vpc_connectivity_profile_path)) ||
+                          (wizardStep===3 && !wizardConfig.storage_policy_uuid) ||
+                          (wizardStep===4 && !wizardConfig.name)
+                        "
+                        class="btn btn-primary btn-sm">
+                  Next <i class="fas fa-arrow-right" style="font-size:0.68rem; margin-left:0.2rem;"></i>
+                </button>
+
+                <button x-show="wizardStep === 5"
+                        @click="deployNow()" :disabled="wizardLoading"
+                        class="btn btn-success btn-sm">
+                  <i :class="wizardLoading ? 'fas fa-circle-notch fa-spin' : 'fas fa-rocket'"
+                     style="font-size:0.68rem; margin-right:0.2rem;"></i>
+                  <span x-text="wizardLoading ? 'Deploying…' : 'Deploy Supervisor'"></span>
+                </button>
+              </div>
+
+            </div><!-- /card -->
+          </div><!-- /install wizard -->
+
+          <div class="app-footer">
+            vSphere Supervisor Readiness Check &middot; VCF 9.1
+          </div>
+
+        </div><!-- /app-content -->
+      </main>
+    </div><!-- /content-container -->
+  </div><!-- /main-container -->
+
+
+  <!-- ═══════════════════════════════════════════════════════════
+       VNA Fix Wizard Modal
+       ═══════════════════════════════════════════════════════════ -->
+  <div x-show="vnaWizard.show" x-cloak
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100"
+       x-transition:leave-end="opacity-0"
+       class="modal" aria-hidden="false">
+    <div class="modal-dialog" role="dialog" aria-modal="true"
+         style="max-width:560px; width:100%; display:flex; flex-direction:column; max-height:92vh;">
+      <div class="modal-content" style="display:flex; flex-direction:column; max-height:92vh;">
+
+        <div class="modal-header">
+          <button type="button" class="close" @click="vnaWizard.show = false">
+            <i class="fas fa-times" style="font-size:0.9rem;"></i>
+          </button>
+          <h3 class="modal-title">
+            <i class="fas fa-wrench clr-error" style="margin-right:0.4rem;"></i>
+            Fix: Install VNA Cluster
+          </h3>
+        </div>
+
+        <!-- Step indicator -->
+        <div x-show="vnaWizard.step >= 1 && vnaWizard.step <= 3"
+             style="padding:0.9rem 1.2rem 0.5rem; border-bottom:1px solid #dfe3e6; flex-shrink:0;">
+          <div style="display:flex; align-items:center;">
+            <template x-for="(lbl, idx) in ['Node IPs','Network','Confirm']" :key="idx">
+              <div style="display:flex; align-items:center;" :style="idx<2 ? 'flex:1' : ''">
+                <div style="display:flex; flex-direction:column; align-items:center;">
+                  <div class="wiz-dot"
+                       :class="{ active: vnaWizard.step===idx+1, done: vnaWizard.step>idx+1, pending: vnaWizard.step<idx+1 }"
+                       x-text="vnaWizard.step > idx+1 ? '✓' : (idx+1)"></div>
+                  <span style="font-size:0.62rem; margin-top:0.18rem; white-space:nowrap;"
+                        :style="{ color: vnaWizard.step===idx+1 ? '#0072a3' : vnaWizard.step>idx+1 ? '#48960c' : '#6e777b' }"
+                        x-text="lbl"></span>
+                </div>
+                <template x-if="idx < 2">
+                  <div style="height:1px; flex:1; margin:0 0.4rem; margin-bottom:0.9rem;"
+                       :style="{ background: vnaWizard.step>idx+1 ? '#48960c' : '#dfe3e6' }"></div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- Step 0: Loading -->
+        <div x-show="vnaWizard.step === 0" class="modal-body" style="flex:1;">
+          <div style="display:flex; align-items:center; gap:0.75rem; color:#4a5568;">
+            <i class="fas fa-circle-notch fa-spin" style="color:#0072a3;"></i>
+            <span>Fetching vCenter options…</span>
+          </div>
+        </div>
+
+        <!-- Step 1 Error -->
+        <div x-show="vnaWizard.step === 1 && vnaWizard.options && !vnaWizard.options.success"
+             class="modal-body" style="flex:1;">
+          <div class="alert alert-danger alert-sm">
+            <div class="alert-items"><div class="alert-item static">
+              <span class="alert-text" x-text="vnaWizard.options && vnaWizard.options.error"></span>
+            </div></div>
+          </div>
+        </div>
+
+        <!-- Step 1: Node IPs + Port Group -->
+        <div x-show="vnaWizard.step === 1 && vnaWizard.options && vnaWizard.options.success"
+             class="modal-body" style="flex:1;">
+
+          <div class="clr-form-control" style="margin-bottom:0.75rem;">
+            <label class="clr-control-label" style="font-size:0.68rem;">Port Group (management VLAN)</label>
+            <div class="clr-control-container"><div class="clr-select-wrapper">
+              <select x-model="vnaWizard.form.port_group_id" class="clr-select">
+                <option value="">— select —</option>
+                <template x-for="pg in (vnaWizard.options ? vnaWizard.options.port_groups : [])" :key="pg.network">
+                  <option :value="pg.network" x-text="pg.name"></option>
+                </template>
+              </select>
+            </div></div>
+          </div>
+
+          <div class="clr-row">
+            <div class="clr-col-6">
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">Node 1 — Management IP</label>
+                <div class="clr-control-container"><div class="clr-input-wrapper">
+                  <input type="text" x-model="vnaWizard.form.ip1" placeholder="10.1.1.85" class="clr-input">
+                </div></div>
+              </div>
+            </div>
+            <div class="clr-col-6">
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">Node 2 — Management IP</label>
+                <div class="clr-control-container"><div class="clr-input-wrapper">
+                  <input type="text" x-model="vnaWizard.form.ip2" placeholder="10.1.1.86" class="clr-input">
+                </div></div>
+              </div>
+            </div>
+          </div>
+
+          <template x-if="vnaWizard.options && (vnaWizard.options.clusters || []).length === 1">
+            <div style="font-size:0.72rem; color:#6e777b; background:#f3f6fa; border-radius:3px; padding:0.5rem 0.75rem; margin-bottom:0.5rem;">
+              <i class="fas fa-info-circle" style="color:#0072a3; margin-right:0.25rem;"></i>
+              vSphere cluster: <strong x-text="vnaWizard.options.clusters[0].name"></strong>
+              &nbsp;·&nbsp; Datastore: <strong x-text="(vnaWizard.options.datastores || [])[0] && (vnaWizard.options.datastores[0].name || '(auto)')"></strong>
+            </div>
+          </template>
+          <template x-if="vnaWizard.options && (vnaWizard.options.clusters || []).length > 1">
+            <div class="clr-form-control" style="margin-bottom:0.75rem;">
+              <label class="clr-control-label" style="font-size:0.68rem;">vSphere Cluster (for VNA deployment)</label>
+              <div class="clr-control-container"><div class="clr-select-wrapper">
+                <select x-model="vnaWizard.form.cluster_moref" class="clr-select">
+                  <template x-for="c in vnaWizard.options.clusters" :key="c.cluster">
+                    <option :value="c.cluster" x-text="c.name"></option>
+                  </template>
+                </select>
+              </div></div>
+            </div>
+          </template>
+
+          <p style="font-size:0.65rem; color:#6e777b; margin-top:0.25rem;">
+            vCenter management subnet:
+            <span style="font-family:monospace;" x-text="(vnaWizard.options && vnaWizard.options.vc_subnet) || 'unknown'"></span>
+          </p>
+          <p style="font-size:0.65rem; margin-top:0.15rem;">
+            vm-mgmt DVPG: <span style="font-family:monospace;"
+              :style="{ color: vnaWizard.options && vnaWizard.options.vm_mgmt_dvpg ? '#48960c' : '#e07400' }"
+              x-text="(vnaWizard.options && vnaWizard.options.vm_mgmt_dvpg) || '⚠ not found in TNC tags'"></span>
+          </p>
+        </div>
+
+        <!-- Step 2: Network Settings -->
+        <div x-show="vnaWizard.step === 2" class="modal-body" style="flex:1;">
+          <div class="alert alert-warning alert-sm" style="margin-bottom:0.75rem;">
+            <div class="alert-items"><div class="alert-item static">
+              <span class="alert-text">
+                These IPs are not in the vCenter management subnet
+                (<span style="font-family:monospace;" x-text="vnaWizard.options && vnaWizard.options.vc_subnet"></span>).
+                Please provide the network settings for this subnet.
+              </span>
+            </div></div>
+          </div>
+          <div class="clr-row">
+            <div class="clr-col-6">
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">Subnet Prefix Length</label>
+                <div class="clr-control-container"><div class="clr-input-wrapper">
+                  <input type="number" x-model="vnaWizard.form.prefix" min="8" max="30" placeholder="24" class="clr-input">
+                </div></div>
+              </div>
+            </div>
+            <div class="clr-col-6">
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">Default Gateway</label>
+                <div class="clr-control-container"><div class="clr-input-wrapper">
+                  <input type="text" x-model="vnaWizard.form.gateway" placeholder="10.x.x.1" class="clr-input">
+                </div></div>
+              </div>
+            </div>
+          </div>
+          <div class="clr-form-control" style="margin-bottom:0.75rem;">
+            <label class="clr-control-label" style="font-size:0.68rem;">DNS Servers (comma-separated)</label>
+            <div class="clr-control-container"><div class="clr-input-wrapper">
+              <input type="text" x-model="vnaWizard.form.dns" placeholder="10.1.1.10, 10.1.1.11" class="clr-input">
+            </div></div>
+          </div>
+          <div class="clr-form-control">
+            <label class="clr-control-label" style="font-size:0.68rem;">NTP Servers (comma-separated)</label>
+            <div class="clr-control-container"><div class="clr-input-wrapper">
+              <input type="text" x-model="vnaWizard.form.ntp" placeholder="pool.ntp.org" class="clr-input">
+            </div></div>
+          </div>
+        </div>
+
+        <!-- Step 3: Confirm -->
+        <div x-show="vnaWizard.step === 3" class="modal-body" style="flex:1;">
+          <p style="font-size:0.85rem; font-weight:600; color:#2b2b2b; margin-bottom:0.75rem;">Review before deploying:</p>
+          <template x-for="[k,v] in [
+            ['Port Group',  (vnaWizard.options && vnaWizard.options.port_groups.find(p => p.network === vnaWizard.form.port_group_id) || {}).name || vnaWizard.form.port_group_id],
+            ['Node 1 IP',   vnaWizard.form.ip1 + '/' + vnaEffectivePrefix()],
+            ['Node 2 IP',   vnaWizard.form.ip2 + '/' + vnaEffectivePrefix()],
+            ['Gateway',     vnaEffectiveGateway()],
+            ['DNS',         vnaEffectiveDns()],
+            ['NTP',         vnaEffectiveNtp()],
+            ['vSphere Cluster', (vnaWizard.options && (vnaWizard.options.clusters||[]).find(c=>c.cluster===(vnaWizard.form.cluster_moref||(vnaWizard.options.clusters[0]&&vnaWizard.options.clusters[0].cluster)))||{}).name||'(auto)'],
+            ['Datastore',   ((vnaWizard.options && vnaWizard.options.datastores||[])[0]||{}).name||'(auto)'],
+          ]" :key="k">
+            <div style="display:flex; justify-content:space-between; font-size:0.8rem; border-bottom:1px solid #dfe3e6; padding:0.45rem 0;">
+              <span style="color:#6e777b; flex-shrink:0; width:7rem;" x-text="k"></span>
+              <span style="color:#2b2b2b; font-weight:500; text-align:right; font-family:monospace;" x-text="v"></span>
+            </div>
+          </template>
+        </div>
+
+        <!-- Step 4: Result / Progress -->
+        <div x-show="vnaWizard.step === 4" class="modal-body" style="flex:1;">
+          <template x-if="!vnaWizard.result">
+            <div style="display:flex; align-items:center; gap:0.75rem; color:#4a5568;">
+              <i class="fas fa-circle-notch fa-spin" style="color:#0072a3;"></i>
+              <span>Creating VNA Cluster…</span>
+            </div>
+          </template>
+          <template x-if="vnaWizard.result && !vnaWizard.result.success">
+            <div>
+              <p style="color:#c21d00; font-weight:600; font-size:0.85rem; margin-bottom:0.5rem;">
+                <i class="fas fa-circle-xmark" style="margin-right:0.25rem;"></i> Deployment failed
+              </p>
+              <pre style="font-size:0.72rem; color:#c21d00; white-space:pre-wrap; overflow-x:auto; background:#fae8e8; padding:0.75rem; border-radius:3px;" x-text="vnaWizard.result.error"></pre>
+            </div>
+          </template>
+          <template x-if="vnaWizard.result && vnaWizard.result.success">
+            <div>
+              <p style="color:#48960c; font-weight:600; font-size:0.85rem; margin-bottom:0.9rem;">
+                <i class="fas fa-check-circle" style="margin-right:0.25rem;"></i> VNA Cluster API call accepted — deploying VMs…
+              </p>
+              <template x-if="!vnaWizard.deployStatus">
+                <div style="display:flex; align-items:center; gap:0.5rem; font-size:0.72rem; color:#6e777b;">
+                  <i class="fas fa-circle-notch fa-spin" style="color:#0072a3;"></i>
+                  <span>Fetching deployment status…</span>
+                </div>
+              </template>
+              <template x-if="vnaWizard.deployStatus">
+                <div>
+                  <div style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.75rem;">
+                    <span style="font-size:0.72rem; font-weight:600; color:#6e777b;">Overall:</span>
+                    <span class="status-chip"
+                          :class="vnaWizard.deployStatus.consolidated_status==='IN_PROGRESS' ? 'configuring' :
+                                  vnaWizard.deployStatus.consolidated_status==='SUCCESS' ? 'running' : 'error'"
+                          x-text="vnaWizard.deployStatus.consolidated_status"></span>
+                    <span x-show="vnaWizard.deployStatus.consolidated_status === 'IN_PROGRESS'"
+                          style="font-size:0.62rem; color:#6e777b;">— polling every 30 s, typically 15–20 min total</span>
+                  </div>
+                  <template x-for="node in (vnaWizard.deployStatus.members || [])" :key="node.name">
+                    <div style="margin-bottom:0.65rem;">
+                      <div style="display:flex; justify-content:space-between; font-size:0.72rem; color:#4a5568;">
+                        <span style="font-weight:500;" x-text="node.name"></span>
+                        <span x-text="node.step || node.status"></span>
+                      </div>
+                      <div class="node-bar">
+                        <div class="node-bar-fill"
+                             :class="{ 'in-progress': node.status!=='SUCCESS'&&node.status!=='FAILED', 'success': node.status==='SUCCESS', 'failed': node.status==='FAILED' }"
+                             :style="'width:' + Math.max(4, node.progress||0) + '%'"></div>
+                      </div>
+                      <p style="font-size:0.62rem; color:#6e777b; text-align:right;" x-text="(node.progress||0) + '%'"></p>
+                    </div>
+                  </template>
+                  <template x-if="vnaWizard.deployStatus.consolidated_status === 'SUCCESS'">
+                    <button @click="vnaWizard.show = false; checkRequirements()"
+                            class="btn btn-success btn-sm" style="width:100%; margin-top:0.5rem;">
+                      <i class="fas fa-rotate-right"></i> Re-check Requirements
+                    </button>
+                  </template>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+
+        <!-- VNA Footer -->
+        <div class="modal-footer" style="flex-shrink:0;">
+          <button @click="vnaWizard.step > 1 && vnaWizard.step < 4 ? vnaWizard.step-- : vnaWizard.show = false"
+                  :disabled="vnaWizard.step === 4 && !vnaWizard.result"
+                  class="btn btn-outline btn-sm">
+            <span x-text="(vnaWizard.step>1 && vnaWizard.step<4) ? '← Back' : 'Cancel'"></span>
+          </button>
+          <button x-show="vnaWizard.step === 1 || vnaWizard.step === 2"
+                  @click="vnaNext()"
+                  :disabled="vnaWizard.step === 1 && !vnaStep1Valid()"
+                  class="btn btn-primary btn-sm">
+            Next →
+          </button>
+          <button x-show="vnaWizard.step === 3"
+                  @click="vnaCreate()" :disabled="vnaWizard.loading"
+                  class="btn btn-warning btn-sm">
+            <i :class="vnaWizard.loading ? 'fas fa-circle-notch fa-spin' : 'fas fa-rocket'"></i>
+            Deploy VNA Cluster
+          </button>
+          <button x-show="vnaWizard.step === 4 && vnaWizard.result"
+                  @click="vnaWizard.show = false"
+                  class="btn btn-outline btn-sm">Close</button>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════════════════
+       Info Modal (unsupported actions)
+       ═══════════════════════════════════════════════════════════ -->
+  <div x-show="infoModal.show" x-cloak
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100"
+       x-transition:leave-end="opacity-0"
+       class="modal" aria-hidden="false">
+    <div class="modal-dialog" role="dialog" aria-modal="true" style="max-width:480px; width:100%;">
+      <div class="modal-content">
+        <div class="modal-header">
+          <button type="button" class="close" @click="infoModal.show = false">
+            <i class="fas fa-times" style="font-size:0.9rem;"></i>
+          </button>
+          <h3 class="modal-title">
+            <i class="fas fa-info-circle clr-warn" style="margin-right:0.4rem;"></i>
+            <span x-text="infoModal.title"></span>
+          </h3>
+        </div>
+        <div class="modal-body">
+          <p style="font-size:0.85rem; color:#4a5568; white-space:pre-wrap;" x-text="infoModal.message"></p>
+          <template x-if="infoModal.link">
+            <p style="font-size:0.85rem; margin-top:0.75rem;">
+              See the <a :href="infoModal.link.url" target="_blank" rel="noopener"
+                         style="color:#0072a3; text-decoration:underline;"
+                         x-text="infoModal.link.text"></a>.
+            </p>
+          </template>
+        </div>
+        <div class="modal-footer">
+          <button @click="infoModal.show = false" class="btn btn-primary btn-sm">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════════════════
+       Fix Modal (S4–S7, both modes)
+       ═══════════════════════════════════════════════════════════ -->
+  <div x-show="fixModal.show" x-cloak
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100"
+       x-transition:leave-end="opacity-0"
+       class="modal" aria-hidden="false">
+    <div class="modal-dialog" role="dialog" aria-modal="true"
+         style="max-width:560px; width:100%; display:flex; flex-direction:column; max-height:92vh;">
+      <div class="modal-content" style="display:flex; flex-direction:column; max-height:92vh;">
+
+        <div class="modal-header" style="flex-shrink:0;">
+          <button type="button" class="close" @click="fixModal.show = false">
+            <i class="fas fa-times" style="font-size:0.9rem;"></i>
+          </button>
+          <h3 class="modal-title">
+            <i class="fas fa-wrench clr-error" style="margin-right:0.4rem;"></i>
+            <span x-text="fixModalTitle()"></span>
+          </h3>
+        </div>
+
+        <!-- Scrollable body -->
+        <div class="modal-body" style="flex:1; overflow-y:auto;">
+
+          <!-- Loading options -->
+          <div x-show="fixModal.step === 0"
+               style="display:flex; align-items:center; gap:0.75rem; color:#4a5568; font-size:0.85rem;">
+            <i class="fas fa-circle-notch fa-spin" style="color:#0072a3;"></i>
+            Loading NSX options…
+          </div>
+
+          <!-- Options error -->
+          <template x-if="fixModal.step === 1 && fixModal.options && !fixModal.options.success">
+            <div class="alert alert-danger alert-sm">
+              <div class="alert-items"><div class="alert-item static">
+                <span class="alert-text" x-text="'Error loading options: ' + fixModal.options.error"></span>
+              </div></div>
+            </div>
+          </template>
+
+          <!-- ── S4 Distributed: Create VLAN Connection ── -->
+          <template x-if="fixModal.step === 1 && fixModal.type === 's4d'">
+            <div>
+              <p style="font-size:0.85rem; color:#4a5568; margin-bottom:1rem;">
+                Create a <strong>Distributed VLAN External Connection</strong> to provide the
+                physical-fabric uplink for NSX VPC (Distributed mode).
+              </p>
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">Connection Name</label>
+                <div class="clr-control-container"><div class="clr-input-wrapper">
+                  <input x-model="fixModal.form.name" placeholder="dvlan-connection-1" class="clr-input">
+                </div></div>
+              </div>
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">VLAN ID</label>
+                <div class="clr-control-container"><div class="clr-input-wrapper">
+                  <input type="number" x-model="fixModal.form.vlan_id" placeholder="e.g. 100" min="0" max="4094" class="clr-input">
+                </div></div>
+                <p style="font-size:0.62rem; color:#6e777b; margin-top:0.2rem;">The VLAN tag on the external uplink.</p>
+              </div>
+              <div class="clr-form-control">
+                <label class="clr-control-label" style="font-size:0.68rem;">Gateway IP / Prefix</label>
+                <div class="clr-control-container"><div class="clr-input-wrapper">
+                  <input x-model="fixModal.form.gateway_cidr" placeholder="e.g. 203.0.113.1/24" class="clr-input">
+                </div></div>
+                <p style="font-size:0.62rem; color:#6e777b; margin-top:0.2rem;">Physical gateway IP with prefix — e.g. "10.1.100.1/24".</p>
+              </div>
+            </div>
+          </template>
+
+          <!-- ── S4 Centralized: Create Gateway Connection ── -->
+          <template x-if="fixModal.step === 1 && fixModal.type === 's4c'">
+            <div>
+              <p style="font-size:0.85rem; color:#4a5568; margin-bottom:1rem;">
+                Create a <strong>Gateway Connection</strong> linking the Transit Gateway to the Tier-0 (BGP) for Centralized NSX-VPC.
+              </p>
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">Connection Name</label>
+                <div class="clr-control-container"><div class="clr-input-wrapper">
+                  <input x-model="fixModal.form.name" placeholder="gw-connection-1" class="clr-input">
+                </div></div>
+              </div>
+              <div class="clr-form-control">
+                <label class="clr-control-label" style="font-size:0.68rem;">Tier-0 Gateway</label>
+                <div class="clr-control-container">
+                  <template x-if="fixModal.options && fixModal.options.t0s && fixModal.options.t0s.length > 0">
+                    <div class="clr-select-wrapper">
+                      <select x-model="fixModal.form.t0_path" class="clr-select">
+                        <template x-for="t0 in fixModal.options.t0s" :key="t0.id">
+                          <option :value="t0.path" x-text="(t0.name || t0.id) + '  (' + t0.path + ')'"></option>
+                        </template>
+                      </select>
+                    </div>
+                  </template>
+                  <template x-if="!fixModal.options || !fixModal.options.t0s || fixModal.options.t0s.length === 0">
+                    <div class="alert alert-warning alert-sm"><div class="alert-items"><div class="alert-item static">
+                      <span class="alert-text">No Tier-0 gateways found. Please create a Tier-0 with BGP first.</span>
+                    </div></div></div>
+                  </template>
+                </div>
+                <p style="font-size:0.62rem; color:#6e777b; margin-top:0.2rem;">Must have BGP configured on the external fabric.</p>
+              </div>
+            </div>
+          </template>
+
+          <!-- ── S5 Distributed ── -->
+          <template x-if="fixModal.step === 1 && fixModal.type === 's5d'">
+            <div>
+              <template x-if="fixModal.form.s5_case === 2">
+                <div>
+                  <p style="font-size:0.85rem; color:#4a5568; margin-bottom:1rem;">
+                    The Default Transit Gateway is already configured as <strong>Centralized</strong>.
+                    A new <strong>Distributed</strong> Transit Gateway will be created and attached to a Distributed External Connection.
+                  </p>
+                  <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                    <label class="clr-control-label" style="font-size:0.68rem;">New TGW Name</label>
+                    <div class="clr-control-container"><div class="clr-input-wrapper">
+                      <input x-model="fixModal.form.new_tgw_name" placeholder="dist-tgw1" class="clr-input">
+                    </div></div>
+                  </div>
+                  <div class="clr-form-control">
+                    <label class="clr-control-label" style="font-size:0.68rem;">Attach to Distributed External Connection</label>
+                    <div class="clr-control-container">
+                      <template x-if="fixModal.options && fixModal.options.dvlan_connections && fixModal.options.dvlan_connections.length > 0">
+                        <div class="clr-select-wrapper">
+                          <select x-model="fixModal.form.connection_path" class="clr-select">
+                            <template x-for="c in fixModal.options.dvlan_connections" :key="c.id">
+                              <option :value="c.path" x-text="c.display_name || c.id"></option>
+                            </template>
+                          </select>
+                        </div>
+                      </template>
+                      <template x-if="!fixModal.options || !fixModal.options.dvlan_connections || fixModal.options.dvlan_connections.length === 0">
+                        <div class="alert alert-warning alert-sm"><div class="alert-items"><div class="alert-item static">
+                          <span class="alert-text">No Distributed External Connection found — complete Step 4 first.</span>
+                        </div></div></div>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </template>
+              <template x-if="fixModal.form.s5_case !== 2">
+                <div>
+                  <p style="font-size:0.85rem; color:#4a5568; margin-bottom:1rem;">
+                    Attach the <strong>Default Transit Gateway</strong> to a Distributed External Connection:
+                  </p>
+                  <div class="clr-form-control">
+                    <label class="clr-control-label" style="font-size:0.68rem;">Distributed External Connection</label>
+                    <div class="clr-control-container">
+                      <template x-if="fixModal.options && fixModal.options.dvlan_connections && fixModal.options.dvlan_connections.length > 0">
+                        <div class="clr-select-wrapper">
+                          <select x-model="fixModal.form.connection_path" class="clr-select">
+                            <template x-for="c in fixModal.options.dvlan_connections" :key="c.id">
+                              <option :value="c.path" x-text="c.display_name || c.id"></option>
+                            </template>
+                          </select>
+                        </div>
+                      </template>
+                      <template x-if="!fixModal.options || !fixModal.options.dvlan_connections || fixModal.options.dvlan_connections.length === 0">
+                        <div class="alert alert-warning alert-sm"><div class="alert-items"><div class="alert-item static">
+                          <span class="alert-text">No Distributed External Connection found — complete Step 4 first.</span>
+                        </div></div></div>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <!-- ── S5 Centralized ── -->
+          <template x-if="fixModal.step === 1 && fixModal.type === 's5c'">
+            <div>
+              <template x-if="fixModal.form.s5_case === 2">
+                <div>
+                  <p style="font-size:0.85rem; color:#4a5568; margin-bottom:1rem;">
+                    The Default Transit Gateway is already configured as <strong>Distributed</strong>.
+                    A new <strong>Centralized</strong> Transit Gateway will be created and attached to a Centralized External Connection.
+                  </p>
+                  <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                    <label class="clr-control-label" style="font-size:0.68rem;">New TGW Name</label>
+                    <div class="clr-control-container"><div class="clr-input-wrapper">
+                      <input x-model="fixModal.form.new_tgw_name" placeholder="cent-tgw1" class="clr-input">
+                    </div></div>
+                  </div>
+                  <div class="clr-form-control">
+                    <label class="clr-control-label" style="font-size:0.68rem;">Attach to Centralized External Connection</label>
+                    <div class="clr-control-container">
+                      <template x-if="fixModal.options && fixModal.options.gw_connections && fixModal.options.gw_connections.length > 0">
+                        <div class="clr-select-wrapper">
+                          <select x-model="fixModal.form.connection_path" class="clr-select">
+                            <template x-for="c in fixModal.options.gw_connections" :key="c.id">
+                              <option :value="c.path" x-text="c.display_name || c.id"></option>
+                            </template>
+                          </select>
+                        </div>
+                      </template>
+                      <template x-if="!fixModal.options || !fixModal.options.gw_connections || fixModal.options.gw_connections.length === 0">
+                        <div class="alert alert-warning alert-sm"><div class="alert-items"><div class="alert-item static">
+                          <span class="alert-text">No Centralized External Connection found — complete Step 4 first.</span>
+                        </div></div></div>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </template>
+              <template x-if="fixModal.form.s5_case !== 2">
+                <div>
+                  <p style="font-size:0.85rem; color:#4a5568; margin-bottom:1rem;">
+                    Attach the <strong>Default Transit Gateway</strong> to a Centralized External Connection:
+                  </p>
+                  <div class="clr-form-control">
+                    <label class="clr-control-label" style="font-size:0.68rem;">Centralized External Connection</label>
+                    <div class="clr-control-container">
+                      <template x-if="fixModal.options && fixModal.options.gw_connections && fixModal.options.gw_connections.length > 0">
+                        <div class="clr-select-wrapper">
+                          <select x-model="fixModal.form.connection_path" class="clr-select">
+                            <template x-for="c in fixModal.options.gw_connections" :key="c.id">
+                              <option :value="c.path" x-text="c.display_name || c.id"></option>
+                            </template>
+                          </select>
+                        </div>
+                      </template>
+                      <template x-if="!fixModal.options || !fixModal.options.gw_connections || fixModal.options.gw_connections.length === 0">
+                        <div class="alert alert-warning alert-sm"><div class="alert-items"><div class="alert-item static">
+                          <span class="alert-text">No Centralized External Connection found — complete Step 4 first.</span>
+                        </div></div></div>
+                      </template>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+
+          <!-- ── S6 (both modes): Create External IP Block ── -->
+          <template x-if="fixModal.step === 1 && (fixModal.type === 's6d' || fixModal.type === 's6c')">
+            <div>
+              <p style="font-size:0.85rem; color:#4a5568; margin-bottom:1rem;">
+                Create an <strong>External IP Block</strong> used for VIP and NAT allocation by NSX VPCs.
+              </p>
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">IP Block Name</label>
+                <div class="clr-control-container"><div class="clr-input-wrapper">
+                  <input x-model="fixModal.form.name"
+                         :placeholder="fixModal.type==='s6c' ? 'cent-ext-ip-block-1' : 'dist-ext-ip-block-1'"
+                         class="clr-input">
+                </div></div>
+              </div>
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">CIDR</label>
+                <div class="clr-control-container">
+                  <!-- Distributed: read-only, pre-filled -->
+                  <template x-if="fixModal.type === 's6d'">
+                    <div class="clr-input-wrapper">
+                      <input :value="fixModal.form.cidr" readonly class="clr-input"
+                             style="background:#f3f6fa; color:#6e777b; cursor:not-allowed;">
+                    </div>
+                  </template>
+                  <!-- Centralized: editable -->
+                  <template x-if="fixModal.type === 's6c'">
+                    <div class="clr-input-wrapper">
+                      <input x-model="fixModal.form.cidr" placeholder="e.g. 203.0.113.0/24" class="clr-input">
+                    </div>
+                  </template>
+                </div>
+                <p style="font-size:0.62rem; color:#6e777b; margin-top:0.2rem;">
+                  <span x-show="fixModal.type === 's6d'">
+                    Pre-filled from the Distributed External Connection
+                    <strong x-text="fixModal.form.dvlan_name || '…'"></strong>
+                    used by the Transit Gateway
+                    <strong x-text="fixModal.form.tgw_name || 'Default Transit Gateway'"></strong>.
+                  </span>
+                  <span x-show="fixModal.type === 's6c'">
+                    A publicly routable subnet (not RFC-1918). NSX VPCs will allocate VIPs and NAT IPs from this range.
+                  </span>
+                </p>
+              </div>
+              <div class="clr-form-control">
+                <label class="clr-control-label" style="font-size:0.68rem;">
+                  Excluded IP Ranges <span style="font-weight:400; text-transform:none;">(optional)</span>
+                </label>
+                <div class="clr-control-container"><div class="clr-input-wrapper">
+                  <input x-model="fixModal.form.excluded_ranges"
+                         placeholder="e.g. 10.1.7.128-10.1.7.130, 10.1.7.254"
+                         class="clr-input">
+                </div></div>
+                <p style="font-size:0.62rem; color:#6e777b; margin-top:0.2rem;">Enter range(s) to exclude (e.g. gateway). Stored as a description on the IP block.</p>
+              </div>
+            </div>
+          </template>
+
+          <!-- ── S7 Distributed: Configure VPC Connectivity Profile ── -->
+          <template x-if="fixModal.step === 1 && fixModal.type === 's7d'">
+            <div>
+              <div style="font-size:0.72rem; color:#4a5568; background:#f3f6fa; border:1px solid #dfe3e6; border-radius:3px; padding:0.5rem 0.75rem; margin-bottom:1rem;">
+                VPC Connectivity Profile:
+                <span style="font-family:monospace; font-weight:700;" x-text="fixModal.form.vpc_profile_name || 'Default VPC Connectivity Profile'"></span>
+              </div>
+
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">NSX Project</label>
+                <div class="clr-control-container"><div class="clr-select-wrapper">
+                  <select x-model="fixModal.form.project_id" @change="s7dProjectChanged()" class="clr-select">
+                    <template x-for="p in (fixModal.options && fixModal.options.projects) || [{id:'default',display_name:'default'}]" :key="p.id">
+                      <option :value="p.id" x-text="p.display_name || p.id"></option>
+                    </template>
+                  </select>
+                </div></div>
+              </div>
+
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">Distributed Transit Gateway</label>
+                <div class="clr-control-container">
+                  <template x-if="fixModal.options && fixModal.options.dist_tgws && fixModal.options.dist_tgws.length > 0">
+                    <div class="clr-select-wrapper">
+                      <select x-model="fixModal.form.tgw_path" @change="s7dTgwChanged()" class="clr-select">
+                        <template x-for="t in fixModal.options.dist_tgws" :key="t.id">
+                          <option :value="t.path" x-text="t.display_name || t.id"></option>
+                        </template>
+                      </select>
+                    </div>
+                  </template>
+                  <template x-if="!fixModal.options || !fixModal.options.dist_tgws || fixModal.options.dist_tgws.length === 0">
+                    <div class="alert alert-warning alert-sm"><div class="alert-items"><div class="alert-item static">
+                      <span class="alert-text">No Distributed Transit Gateway found — complete Step 5 first.</span>
+                    </div></div></div>
+                  </template>
+                </div>
+              </div>
+
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">External IP Block</label>
+                <div class="clr-control-container">
+                  <template x-if="fixModal.options && (fixModal.options.filtered_ext_blocks || fixModal.options.ext_ip_blocks) && (fixModal.options.filtered_ext_blocks || fixModal.options.ext_ip_blocks).length > 0">
+                    <div class="clr-select-wrapper">
+                      <select x-model="fixModal.form.ext_ip_block_path" class="clr-select">
+                        <template x-for="b in (fixModal.options.filtered_ext_blocks && fixModal.options.filtered_ext_blocks.length ? fixModal.options.filtered_ext_blocks : fixModal.options.ext_ip_blocks || [])" :key="b.id">
+                          <option :value="b.path" x-text="(b.display_name || b.id) + (b.cidr ? '  (' + b.cidr + ')' : '')"></option>
+                        </template>
+                      </select>
+                    </div>
+                  </template>
+                  <template x-if="!fixModal.options || ((!fixModal.options.filtered_ext_blocks || !fixModal.options.filtered_ext_blocks.length) && (!fixModal.options.ext_ip_blocks || !fixModal.options.ext_ip_blocks.length))">
+                    <div class="alert alert-warning alert-sm"><div class="alert-items"><div class="alert-item static">
+                      <span class="alert-text">No External IP Block found — complete Step 6 first.</span>
+                    </div></div></div>
+                  </template>
+                </div>
+              </div>
+
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">VNA Cluster</label>
+                <div class="clr-control-container">
+                  <template x-if="fixModal.options && fixModal.options.vna_clusters && fixModal.options.vna_clusters.length > 0">
+                    <div class="clr-select-wrapper">
+                      <select x-model="fixModal.form.cluster_path" class="clr-select">
+                        <template x-for="c in fixModal.options.vna_clusters" :key="c.id">
+                          <option :value="c.path" x-text="c.display_name || c.id"></option>
+                        </template>
+                      </select>
+                    </div>
+                  </template>
+                  <template x-if="!fixModal.options || !fixModal.options.vna_clusters || fixModal.options.vna_clusters.length === 0">
+                    <div class="alert alert-warning alert-sm"><div class="alert-items"><div class="alert-item static">
+                      <span class="alert-text">No VNA Cluster found — complete Step 3 first.</span>
+                    </div></div></div>
+                  </template>
+                </div>
+              </div>
+
+              <div class="clr-form-control">
+                <label class="clr-control-label" style="font-size:0.68rem;">Private TGW IP Block</label>
+                <div class="clr-control-container">
+                  <template x-if="fixModal.options && fixModal.options.private_ip_blocks && fixModal.options.private_ip_blocks.length > 0">
+                    <div class="clr-select-wrapper">
+                      <select x-model="fixModal.form.private_ip_block_path" class="clr-select">
+                        <template x-for="b in fixModal.options.private_ip_blocks" :key="b.id">
+                          <option :value="b.path" x-text="(b.display_name || b.id) + (b.cidr ? '  (' + b.cidr + ')' : '')"></option>
+                        </template>
+                      </select>
+                    </div>
+                  </template>
+                  <template x-if="!fixModal.options || !fixModal.options.private_ip_blocks || fixModal.options.private_ip_blocks.length === 0">
+                    <div class="alert alert-warning alert-sm"><div class="alert-items"><div class="alert-item static">
+                      <span class="alert-text">No Private IP Block found in this project.</span>
+                    </div></div></div>
+                  </template>
+                </div>
+                <p style="font-size:0.62rem; color:#6e777b; margin-top:0.2rem;">Private IP block for TGW internal transit subnets (visibility: Private).</p>
+              </div>
+
+              <!-- Auto-configured fields info -->
+              <div style="background:#f3f6fa; border:1px solid #dfe3e6; border-radius:3px; padding:0.65rem 0.85rem; margin-top:0.75rem; font-size:0.72rem; color:#4a5568;">
+                <p style="margin:0 0 0.15rem;"><span style="font-weight:600;">N/S Services:</span> enabled</p>
+                <p style="margin:0;"><span style="font-weight:600;">Outbound NAT:</span> enabled (auto-SNAT)</p>
+              </div>
+            </div>
+          </template>
+
+          <!-- ── S7 Centralized: Configure VPC Connectivity Profile ── -->
+          <template x-if="fixModal.step === 1 && fixModal.type === 's7c'">
+            <div>
+              <p style="font-size:0.85rem; color:#4a5568; margin-bottom:1rem;">
+                Configure the <strong>Default VPC Connectivity Profile</strong> with all fields required for Supervisor deployment.
+              </p>
+
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">External IP Block</label>
+                <div class="clr-control-container">
+                  <template x-if="fixModal.options && fixModal.options.cent_ext_ip_blocks && fixModal.options.cent_ext_ip_blocks.length > 0">
+                    <div class="clr-select-wrapper">
+                      <select x-model="fixModal.form.ext_ip_block_path" class="clr-select">
+                        <template x-for="b in fixModal.options.cent_ext_ip_blocks" :key="b.id">
+                          <option :value="b.path" x-text="(b.name || b.id) + '  (' + b.cidr + ')'"></option>
+                        </template>
+                      </select>
+                    </div>
+                  </template>
+                  <template x-if="!fixModal.options || !fixModal.options.cent_ext_ip_blocks || fixModal.options.cent_ext_ip_blocks.length === 0">
+                    <div class="alert alert-warning alert-sm"><div class="alert-items"><div class="alert-item static">
+                      <span class="alert-text">No valid External IP Block found — must be visibility=EXTERNAL and not overlap a Distributed VLAN subnet.</span>
+                    </div></div></div>
+                  </template>
+                </div>
+              </div>
+
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">Edge Cluster</label>
+                <div class="clr-control-container">
+                  <template x-if="fixModal.options && fixModal.options.edge_clusters && fixModal.options.edge_clusters.length > 0">
+                    <div class="clr-select-wrapper">
+                      <select x-model="fixModal.form.cluster_path" class="clr-select">
+                        <template x-for="c in fixModal.options.edge_clusters" :key="c.id">
+                          <option :value="c.path" x-text="(c.name || c.id) + '  (' + c.path + ')'"></option>
+                        </template>
+                      </select>
+                    </div>
+                  </template>
+                  <template x-if="!fixModal.options || !fixModal.options.edge_clusters || fixModal.options.edge_clusters.length === 0">
+                    <div class="alert alert-warning alert-sm"><div class="alert-items"><div class="alert-item static">
+                      <span class="alert-text">No Edge cluster found — complete Step 3 first.</span>
+                    </div></div></div>
+                  </template>
+                </div>
+              </div>
+
+              <div class="clr-form-control">
+                <label class="clr-control-label" style="font-size:0.68rem;">Private TGW IP Block</label>
+                <div class="clr-control-container">
+                  <template x-if="fixModal.options && fixModal.options.private_ip_blocks && fixModal.options.private_ip_blocks.length > 0">
+                    <div class="clr-select-wrapper">
+                      <select x-model="fixModal.form.private_ip_block_path" class="clr-select">
+                        <template x-for="b in fixModal.options.private_ip_blocks" :key="b.id">
+                          <option :value="b.path" x-text="(b.name || b.id) + '  (' + b.cidr + ')'"></option>
+                        </template>
+                      </select>
+                    </div>
+                  </template>
+                  <template x-if="!fixModal.options || !fixModal.options.private_ip_blocks || fixModal.options.private_ip_blocks.length === 0">
+                    <div class="alert alert-warning alert-sm"><div class="alert-items"><div class="alert-item static">
+                      <span class="alert-text">No Private IP Block found.</span>
+                    </div></div></div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- ── Result (step 2) ── -->
+          <template x-if="fixModal.step === 2">
+            <div>
+              <template x-if="fixModal.loading">
+                <div style="display:flex; align-items:center; gap:0.75rem; color:#4a5568; font-size:0.85rem;">
+                  <i class="fas fa-circle-notch fa-spin" style="color:#0072a3;"></i>
+                  Applying fix…
+                </div>
+              </template>
+              <template x-if="!fixModal.loading && fixModal.result && fixModal.result.success">
+                <div style="text-align:center; padding:0.75rem 0;">
+                  <div style="width:3.5rem; height:3.5rem; border-radius:50%; background:#dff0d0; display:flex; align-items:center; justify-content:center; margin:0 auto 0.75rem;">
+                    <i class="fas fa-check" style="font-size:1.5rem; color:#48960c;"></i>
+                  </div>
+                  <p style="font-size:0.85rem; font-weight:600; color:#48960c; margin-bottom:0.05rem;">Fix applied successfully!</p>
+                  <template x-if="fixModal.result.path">
+                    <p style="font-size:0.72rem; font-family:monospace; color:#6e777b; word-break:break-all;" x-text="fixModal.result.path"></p>
+                  </template>
+                  <p style="font-size:0.72rem; color:#6e777b; margin-top:0.3rem;">
+                    Click <strong>Re-check Requirements</strong> to confirm the step is now green.
+                  </p>
+                </div>
+              </template>
+              <template x-if="!fixModal.loading && fixModal.result && !fixModal.result.success">
+                <div>
+                  <div style="display:flex; align-items:center; gap:0.45rem; color:#c21d00; margin-bottom:0.5rem;">
+                    <i class="fas fa-times-circle"></i>
+                    <span style="font-size:0.85rem; font-weight:600;">Fix failed</span>
+                  </div>
+                  <pre style="font-size:0.72rem; background:#fae8e8; border-radius:3px; padding:0.75rem; color:#c21d00; overflow-x:auto; white-space:pre-wrap;" x-text="fixModal.result.error"></pre>
+                </div>
+              </template>
+            </div>
+          </template>
+
+        </div><!-- /modal-body -->
+
+        <!-- Fix Modal Footer -->
+        <div class="modal-footer" style="flex-shrink:0;">
+          <button @click="fixModal.show = false" class="btn btn-outline btn-sm">Cancel</button>
+          <div style="display:flex; gap:0.45rem;">
+            <button x-show="fixModal.step === 1"
+                    @click="fixApply()"
+                    :disabled="!fixModalCanApply()"
+                    class="btn btn-warning btn-sm">
+              <i class="fas fa-wrench"></i> Apply Fix
+            </button>
+            <button x-show="fixModal.step === 2 && fixModal.result && fixModal.result.success"
+                    @click="fixModal.show = false; checkRequirements()"
+                    class="btn btn-success btn-sm">
+              <i class="fas fa-sync-alt"></i> Re-check Requirements
+            </button>
+            <button x-show="fixModal.step === 2 && fixModal.result && !fixModal.result.success"
+                    @click="fixModal.step = 1; fixModal.result = null"
+                    class="btn btn-warning btn-sm">
+              <i class="fas fa-undo"></i> Back to Form
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ═══════════════════════════════════════════════════════════
+       Alpine.js application logic (identical to reference app)
+       ═══════════════════════════════════════════════════════════ -->
+  <script>
+  function app() {
+    return {
+      form: {
+        vc_url:   '',
+        username: 'administrator@vsphere.local',
+        password: '',
+        nsx_url:  '',
+        nsx_user: 'admin',
+        nsx_pass: ''
+      },
+      showNsx:        false,
+      showPwd:        false,
+      loading:        false,
+      loadingInstalled: false,
+      loadingReq:     false,
+      installResult:  null,
+      showReqBtn:     false,
+      showModeInfo:   true,
+      modes: { distributed: [], centralized: [], vds_flb: [] },
+
+      // ── Install Wizard ─────────────────────────────────────────────────
+      showInstallWizard: false,
+      wizardDeployMode: 'distributed',
+      wizardStep:  0,
+      wizardLoading: false,
+      wizardOptions: null,
+      wizardConfig: {
+        cluster_moref: '', cluster_name: '',
+        port_group_id: '',
+        first_ip: '', gateway_cidr: '',
+        dns_servers: '', search_domains: '', ntp_servers: '',
+        storage_policy_uuid: '', storage_policy_name: '',
+        nsx_project_path: '/orgs/default/projects/default',
+        nsx_project_name: 'default',
+        vpc_connectivity_profile_path: '/orgs/default/projects/default/vpc-connectivity-profiles/default',
+        vpc_profile_name: 'default',
+        size: 'SMALL', name: ''
+      },
+      wizardResult:   null,
+      deployClusterId: '',
+      deployStatus:   null,
+      // ──────────────────────────────────────────────────────────────────
+
+      // ── VNA Fix Wizard ────────────────────────────────────────────────
+      vnaWizard: {
+        show:    false,
+        step:    0,
+        loading: false,
+        options: null,
+        form: {
+          port_group_id: '',
+          cluster_moref: '',
+          datastore_id:  '',
+          ip1: '', ip2: '',
+          prefix: 24,
+          gateway: '', dns: '', ntp: '',
+          overlay_tz_path: ''
+        },
+        result:       null,
+        deployStatus: null,
+      },
+      // ──────────────────────────────────────────────────────────────────
+
+      hasResults() {
+        return (this.modes.distributed || []).length > 0;
+      },
+
+      overallFor(key) {
+        const checks = this.modes[key] || [];
+        if (!checks.length) return 'unknown';
+        if (checks.some(r => r.status === 'error'))   return 'issues';
+        if (checks.some(r => r.status === 'warning')) return 'warnings';
+        return 'ready';
+      },
+
+      reset() {
+        this.installResult = null;
+        this.showReqBtn    = false;
+        this.modes         = { distributed: [], centralized: [], vds_flb: [] };
+        this.showInstallWizard = false;
+        this.wizardStep    = 0;
+        document.querySelectorAll('.req-cols .card-header, .req-cols .pros-cons-section')
+          .forEach(el => el.style.minHeight = '');
+      },
+
+      /* Make column headers and pros/cons rows the same height across all 3 cards.
+         Runs independently for EACH .req-cols group on the page. */
+      equalizeColRows() {
+        const run = () => {
+          document.querySelectorAll('.req-cols').forEach(cols => {
+            const cards = [...cols.querySelectorAll(':scope > .card')];
+            if (cards.length < 2) return;
+
+            const setEq = getter => {
+              const els = cards.map(getter).filter(Boolean);
+              els.forEach(el => el.style.minHeight = '');
+              const max = Math.max(...els.map(el => el.offsetHeight));
+              if (max > 5) els.forEach(el => el.style.minHeight = max + 'px');
+            };
+
+            setEq(c => c.querySelector('.card-header'));
+            setEq(c => c.querySelector('.pros-cons-section'));
+          });
+        };
+
+        this.$nextTick(() => requestAnimationFrame(run));
+        setTimeout(run, 250);
+      },
+
+      init() {
+        window.addEventListener('resize', () => this.equalizeColRows());
+      },
+
+      async checkInstalled() {
+        if (!this.form.vc_url || !this.form.password) return;
+        this.loadingInstalled = true;
+        this.loading          = true;
+        this.installResult    = null;
+        this.showReqBtn       = false;
+        this.reqResults       = [];
+        try {
+          const r = await fetch('/api/check-installed', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(this.form)
+          });
+          const d = await r.json();
+          this.installResult = d;
+          if (d.success && !d.installed) this.showReqBtn = true;
+          if (d.success && d.installed) this.equalizeColRows();
+        } catch (e) {
+          this.installResult = {error: String(e)};
+        } finally {
+          this.loadingInstalled = false;
+          this.loading          = false;
+        }
+      },
+
+      async checkRequirements() {
+        this.loadingReq = true;
+        this.loading    = true;
+        this.modes      = { distributed: [], centralized: [], vds_flb: [] };
+        try {
+          const r = await fetch('/api/check-requirements', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(this.form)
+          });
+          const d = await r.json();
+          const process = arr => (arr || []).map(c => ({ ...c, expanded: false }));
+          this.modes = {
+            distributed: process((d.modes || {}).distributed),
+            centralized:  process((d.modes || {}).centralized),
+            vds_flb:      process((d.modes || {}).vds_flb),
+          };
+        } catch (e) {
+          const err = [{ step:'?', name:'Request Error', status:'error',
+                         message: String(e), details:'', expanded: true }];
+          this.modes = { distributed: err, centralized: [...err], vds_flb: [...err] };
+        } finally {
+          this.loadingReq = false;
+          this.loading    = false;
+          this.equalizeColRows();
+        }
+      },
+
+      // ── Wizard methods ────────────────────────────────────────────────
+      async startInstallWizard(deployMode) {
+        this.showInstallWizard = true;
+        this.wizardStep   = 0;
+        this.wizardLoading = true;
+        this.wizardOptions = null;
+        this.wizardResult  = null;
+        this.deployStatus  = null;
+        this.wizardDeployMode = deployMode || 'distributed';
+        this.wizardConfig  = {
+          cluster_moref: '', cluster_name: '',
+          port_group_id: '',
+          first_ip: '', gateway_cidr: '',
+          dns_servers: '', search_domains: '', ntp_servers: '',
+          storage_policy_uuid: '', storage_policy_name: '',
+          nsx_project_path: '/orgs/default/projects/default',
+          nsx_project_name: 'default',
+          vpc_connectivity_profile_path: '/orgs/default/projects/default/vpc-connectivity-profiles/default',
+          vpc_profile_name: 'default',
+          size: 'SMALL', name: ''
+        };
+        try {
+          const r = await fetch('/api/discover-install-options', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(this.form)
+          });
+          const d = await r.json();
+          this.wizardOptions = d;
+          if (!d.error) {
+            // Auto-select cluster if only one is available
+            const clusters = d.clusters || [];
+            if (clusters.length === 1) {
+              this.wizardConfig.cluster_moref = clusters[0].cluster;
+              this.wizardConfig.cluster_name  = clusters[0].name;
+            }
+            const def = d.vc_defaults || {};
+            if (def.dns_servers && def.dns_servers.length)
+              this.wizardConfig.dns_servers = def.dns_servers.join(', ');
+            if (def.search_domains && def.search_domains.length)
+              this.wizardConfig.search_domains = def.search_domains.join(', ');
+            if (def.ntp_servers && def.ntp_servers.length)
+              this.wizardConfig.ntp_servers = def.ntp_servers.join(', ');
+            if (def.gateway)
+              this.wizardConfig.gateway_cidr = def.gateway;
+            // Suggest name from vCenter hostname
+            const host = this.form.vc_url.replace(/^https?:\/\//, '').split('.')[0];
+            this.wizardConfig.name = 'supervisor-' + host.replace(/^vc-?/, '');
+            // Build valid NSX projects list using S7 step for the selected deploy mode
+            const dMode = this.wizardDeployMode || 'distributed';
+            const s7Step = (this.modes[dMode] || []).find(s => s.step === '7');
+            const vcpsFromS7 = (s7Step && s7Step.valid_vcps_for_deploy) || null;
+            const validProjs = vcpsFromS7 || d.valid_nsx_projects || [];
+
+            this.wizardOptions = { ...this.wizardOptions, valid_nsx_projects: validProjs };
+
+            // Wait for x-for to render the options before setting x-model value
+            await this.$nextTick();
+
+            // Auto-select: always pick first project + first profile
+            if (validProjs.length > 0) {
+              const firstProj = validProjs[0];
+              this.wizardConfig.nsx_project_path = firstProj.path;
+              this.wizardConfig.nsx_project_name = firstProj.display_name;
+              const profs = firstProj.valid_vpc_profiles || [];
+              if (profs.length > 0) {
+                this.wizardConfig.vpc_connectivity_profile_path = profs[0].path;
+                this.wizardConfig.vpc_profile_name = profs[0].display_name;
+              }
+            }
+          }
+        } catch (e) {
+          this.wizardOptions = { error: String(e) };
+        } finally {
+          this.wizardLoading = false;
+          this.wizardStep = 1;
+        }
+      },
+
+      wizardProjectChanged() {
+        const projs = (this.wizardOptions || {}).valid_nsx_projects || [];
+        const proj = projs.find(p => p.path === this.wizardConfig.nsx_project_path);
+        if (!proj) return;
+        this.wizardConfig.nsx_project_name = proj.display_name;
+        const profs = proj.valid_vpc_profiles || [];
+        this.wizardConfig.vpc_connectivity_profile_path = profs.length ? profs[0].path : '';
+        this.wizardConfig.vpc_profile_name = profs.length ? profs[0].display_name : '';
+      },
+
+      wizardProfileChanged() {
+        const projs = (this.wizardOptions || {}).valid_nsx_projects || [];
+        const proj = projs.find(p => p.path === this.wizardConfig.nsx_project_path);
+        if (proj) {
+          const prof = (proj.valid_vpc_profiles || []).find(
+            p => p.path === this.wizardConfig.vpc_connectivity_profile_path);
+          if (prof) this.wizardConfig.vpc_profile_name = prof.display_name;
+        }
+      },
+
+      wizardGetProfiles() {
+        const projs = (this.wizardOptions || {}).valid_nsx_projects || [];
+        const proj = projs.find(p => p.path === this.wizardConfig.nsx_project_path);
+        return proj ? (proj.valid_vpc_profiles || []) : [];
+      },
+
+      async wizardAdvance() {
+        if (this.wizardStep === 1 && this.wizardConfig.cluster_moref) {
+          try {
+            const r = await fetch('/api/storage-policies-for-cluster', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ ...this.form, cluster_moref: this.wizardConfig.cluster_moref })
+            });
+            const d = await r.json();
+            if (d.policies && d.policies.length) {
+              this.wizardOptions = { ...this.wizardOptions, storage_policies: d.policies };
+              const ids = d.policies.map(p => p.policy);
+              if (!ids.includes(this.wizardConfig.storage_policy_uuid)) {
+                this.wizardConfig.storage_policy_uuid = '';
+                this.wizardConfig.storage_policy_name = '';
+              }
+            }
+          } catch (e) { /* keep existing list on error */ }
+        }
+        this.wizardStep++;
+      },
+
+      async deployNow() {
+        this.wizardLoading = true;
+        this.wizardResult  = null;
+        this.wizardStep    = 6;
+        try {
+          const r = await fetch('/api/install-supervisor', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ ...this.form, config: { ...this.wizardConfig } })
+          });
+          this.wizardResult = await r.json();
+          if (this.wizardResult.success) {
+            this.deployClusterId = this.wizardConfig.cluster_moref;
+            this._pollDeploy();
+          }
+        } catch (e) {
+          this.wizardResult = { success: false, error: String(e) };
+        } finally {
+          this.wizardLoading = false;
+        }
+      },
+
+      async _pollDeploy() {
+        if (!this.deployClusterId) return;
+        try {
+          const r = await fetch('/api/supervisor-status', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              vc_url:   this.form.vc_url,
+              username: this.form.username,
+              password: this.form.password,
+              cluster_id: this.deployClusterId
+            })
+          });
+          const d = await r.json();
+          if (d.success && d.status) {
+            this.deployStatus = d.status;
+            const s = d.status.config_status;
+            if (s === 'RUNNING' || s === 'ERROR') {
+              this.wizardStep = 7;
+              return;
+            }
+          }
+        } catch (_) { /* retry */ }
+        setTimeout(() => this._pollDeploy(), 15000);
+      },
+      // ─────────────────────────────────────────────────────────────────
+
+      // ── VNA Fix Wizard methods ─────────────────────────────────────────
+      infoModal: { show: false, title: '', message: '', link: null },
+
+      fixModal: {
+        show: false, type: '', mode: '', step: 0,
+        options: null, loading: false, result: null,
+        form: {
+          name: '', vlan_id: '', gateway_cidr: '',
+          t0_path: '', connection_path: '', cidr: '',
+          ext_ip_block_path: '', cluster_path: '', private_ip_block_path: '',
+          dvlan_name: '', tgw_name: '', excluded_ranges: ''
+        }
+      },
+
+      handleFixStep(detail) {
+        const {step, mode} = detail;
+        if (step === '3' && mode === 'distributed') {
+          this.openVnaFix();
+          return;
+        }
+        if (step === '3' && mode === 'centralized') {
+          this.infoModal = {
+            show: true,
+            title: 'Edge Cluster + Tier-0 + BGP — Not Automated',
+            message: 'This tool does not support automated deployment of Edge Cluster + Tier-0 + BGP.\nPlease follow the blog for a guided installation.',
+            link: { text: 'blog with recorded installation demo here',
+                    url:  'https://blogs.vmware.com/cloud-foundation/2025/06/25/vpc-centralized-network-connectivity-with-guided-edge-deployment/' }
+          };
+          return;
+        }
+        if (['4','5','6','7'].includes(step) && mode !== 'vds_flb') {
+          this.openFixModal(step, mode);
+        }
+      },
+
+      fixModalTitle() {
+        const t = {
+          s4d: 'Fix: Create VLAN External Connection',
+          s4c: 'Fix: Create Gateway Connection',
+          s5d: this.fixModal.form && this.fixModal.form.s5_case === 2
+                 ? 'Fix: Create Distributed TGW + Attachment'
+                 : 'Fix: Attach Default TGW (Distributed)',
+          s5c: this.fixModal.form && this.fixModal.form.s5_case === 2
+                 ? 'Fix: Create Centralized TGW + Attachment'
+                 : 'Fix: Attach Default TGW (Centralized)',
+          s6d: 'Fix: Create External IP Block',
+          s6c: 'Fix: Create External IP Block',
+          s7d: 'Fix: Configure VPC Connectivity Profile',
+          s7c: 'Fix: Configure VPC Connectivity Profile',
+        };
+        return t[this.fixModal.type] || 'Fix';
+      },
+
+      fixModalCanApply() {
+        const f = this.fixModal.form;
+        switch (this.fixModal.type) {
+          case 's4d': return f.name && f.vlan_id !== '' && f.gateway_cidr;
+          case 's4c': return f.name && f.t0_path;
+          case 's5d':
+            if (f.s5_case === 2) return !!f.connection_path && !!f.new_tgw_name;
+            return !!f.connection_path;
+          case 's5c':
+            if (f.s5_case === 2) return !!f.connection_path && !!f.new_tgw_name;
+            return !!f.connection_path;
+          case 's6d':
+          case 's6c': return f.name && f.cidr;
+          case 's7d': return !!f.tgw_path && !!f.ext_ip_block_path && !!f.cluster_path;
+          case 's7c': return !!f.ext_ip_block_path && !!f.cluster_path;
+          default: return true;
+        }
+      },
+
+      toCidr(gatewayAddr) {
+        try {
+          const [ip, prefix] = gatewayAddr.split('/');
+          const p    = parseInt(prefix);
+          const mask = p === 0 ? 0 : (~0 << (32 - p)) >>> 0;
+          const toInt  = a => a.split('.').reduce((acc, x) => ((acc << 8) + parseInt(x, 10)) >>> 0, 0);
+          const fromInt = n => [(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255].join('.');
+          return fromInt(toInt(ip) & mask) + '/' + prefix;
+        } catch { return gatewayAddr; }
+      },
+
+      async openFixModal(step, mode) {
+        const mShort = mode === 'distributed' ? 'd' : 'c';
+        const type   = `s${step}${mShort}`;
+
+        this.fixModal = {
+          show: true, type, mode, step: 0,
+          options: null, loading: false, result: null,
+          form: {
+            name: '', vlan_id: '', gateway_cidr: '',
+            t0_path: '', connection_path: '', cidr: '',
+            ext_ip_block_path: '', cluster_path: '', private_ip_block_path: '',
+            dvlan_name: '', tgw_name: '', excluded_ranges: '',
+            s5_case: 1, new_tgw_name: 'dist-tgw1',
+            project_id: 'default', tgw_path: '', vpc_profile_name: 'Default VPC Connectivity Profile'
+          }
+        };
+
+        const defaultNames = {s4d:'dvlan-connection-1', s4c:'gw-connection-1', s6d:'dist-ext-ip-block-1', s6c:'cent-ext-ip-block-1'};
+        if (defaultNames[type]) this.fixModal.form.name = defaultNames[type];
+
+        if (type === 's7d') {
+          try {
+            const r = await fetch('/api/fix/vpc-profile-options', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({
+                nsx_url:    this.form.nsx_url,
+                nsx_user:   this.form.nsx_user,
+                nsx_pass:   this.form.nsx_pass,
+                project_id: 'default'
+              })
+            });
+            const d = await r.json();
+            this.fixModal.options = d;
+            this.fixModal.form.project_id = 'default';
+            if (d.success) {
+              const distTgws = d.dist_tgws || [];
+              this.fixModal.form.tgw_path = distTgws.length > 0 ? distTgws[0].path : '';
+              this.s7dTgwChanged();
+              const vnas = d.vna_clusters || [];
+              if (vnas.length > 0) this.fixModal.form.cluster_path = vnas[0].path;
+              const privs = d.private_ip_blocks || [];
+              if (privs.length > 0) this.fixModal.form.private_ip_block_path = privs[0].path;
+            }
+          } catch(e) {
+            this.fixModal.options = { success: false, error: String(e) };
+          }
+          this.fixModal.step = 1;
+          return;
+        }
+
+        try {
+          const r = await fetch('/api/fix/nsx-prereq-options', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              vc_url:   this.form.vc_url,
+              nsx_url:  this.form.nsx_url,
+              nsx_user: this.form.nsx_user,
+              nsx_pass: this.form.nsx_pass
+            })
+          });
+          const d = await r.json();
+          this.fixModal.options = d;
+
+          if (d.success) {
+            if (step === '5' && mode === 'distributed') {
+              const hasCentralized = (d.tgw_attachments || [])
+                .some(a => (a.connection_path || '').includes('/gateway-connections/'));
+              this.fixModal.form.s5_case     = hasCentralized ? 2 : 1;
+              this.fixModal.form.new_tgw_name = 'dist-tgw1';
+              const conns = d.dvlan_connections || [];
+              if (conns.length > 0) this.fixModal.form.connection_path = conns[0].path;
+            }
+            if (step === '5' && mode === 'centralized') {
+              const hasDistributed = (d.tgw_attachments || [])
+                .some(a => (a.connection_path || '').includes('/distributed-vlan-connections/'));
+              this.fixModal.form.s5_case      = hasDistributed ? 2 : 1;
+              this.fixModal.form.new_tgw_name = 'cent-tgw1';
+              const conns = d.gw_connections || [];
+              if (conns.length > 0) this.fixModal.form.connection_path = conns[0].path;
+              const ecs = d.edge_clusters || [];
+              if (ecs.length > 0) this.fixModal.form.edge_cluster_path = ecs[0].path;
+            }
+            if (step === '6' && mode === 'distributed') {
+              let dvlanUsed = d.dvlan_connections && d.dvlan_connections[0];
+              if (d.tgw_attachments && d.tgw_attachments.length > 0) {
+                const tgwConnPath = d.tgw_attachments[0].connection_path;
+                const matched = (d.dvlan_connections || []).find(c => c.path === tgwConnPath);
+                if (matched) dvlanUsed = matched;
+              }
+              const gws = dvlanUsed && dvlanUsed.gateway_addresses;
+              if (gws && gws[0]) this.fixModal.form.cidr = this.toCidr(gws[0]);
+              this.fixModal.form.dvlan_name = dvlanUsed ? (dvlanUsed.display_name || dvlanUsed.id || '') : '';
+              this.fixModal.form.tgw_name   = (d.tgw && (d.tgw.name || d.tgw.id)) || 'Default Transit Gateway';
+              this.fixModal.form.excluded_ranges = '';
+            }
+            if (step === '7') {
+              const extBlocks = mode === 'centralized'
+                ? (d.cent_ext_ip_blocks || [])
+                : (d.ip_blocks || []);
+              const extB = extBlocks[0];
+              if (extB) this.fixModal.form.ext_ip_block_path = extB.path;
+              if (mode === 'distributed') {
+                const vna = d.vna_clusters && d.vna_clusters[0];
+                if (vna) this.fixModal.form.cluster_path = vna.path;
+              } else {
+                const ec = d.edge_clusters && d.edge_clusters[0];
+                if (ec) this.fixModal.form.cluster_path = ec.path;
+              }
+              if (mode === 'centralized') {
+                const centTgw = (d.cent_tgws || [])[0];
+                if (centTgw) this.fixModal.form.tgw_path = centTgw.path;
+              }
+              const privB = d.private_ip_blocks && d.private_ip_blocks[0];
+              if (privB) this.fixModal.form.private_ip_block_path = privB.path;
+            } else if (step === '4' && mode === 'centralized') {
+              const t0 = d.t0s && d.t0s[0];
+              if (t0) this.fixModal.form.t0_path = t0.path;
+            }
+          }
+        } catch(e) {
+          this.fixModal.options = { success: false, error: String(e) };
+        }
+
+        this.fixModal.step = 1;
+      },
+
+      async fixApply() {
+        const f = this.fixModal.form;
+        const base = {
+          vc_url:   this.form.vc_url,
+          nsx_url:  this.form.nsx_url,
+          nsx_user: this.form.nsx_user,
+          nsx_pass: this.form.nsx_pass
+        };
+
+        let endpoint, payload;
+        switch (this.fixModal.type) {
+          case 's4d':
+            endpoint = '/api/fix/create-vlan-connection';
+            payload  = {...base, name: f.name, vlan_id: parseInt(f.vlan_id)||0, gateway_cidr: f.gateway_cidr};
+            break;
+          case 's4c':
+            endpoint = '/api/fix/create-gateway-connection';
+            payload  = {...base, name: f.name, t0_path: f.t0_path};
+            break;
+          case 's5d':
+            if (f.s5_case === 2) {
+              endpoint = '/api/fix/create-dist-tgw';
+              payload  = {...base, connection_path: f.connection_path, new_tgw_name: f.new_tgw_name || 'dist-tgw1'};
+            } else {
+              endpoint = '/api/fix/create-tgw-attachment';
+              payload  = {...base, connection_path: f.connection_path};
+            }
+            break;
+          case 's5c':
+            if (f.s5_case === 2) {
+              endpoint = '/api/fix/create-cent-tgw';
+              payload  = {...base, connection_path: f.connection_path,
+                          new_tgw_name: f.new_tgw_name || 'cent-tgw1',
+                          edge_cluster_path: f.edge_cluster_path || ''};
+            } else {
+              endpoint = '/api/fix/create-tgw-attachment';
+              payload  = {...base, connection_path: f.connection_path,
+                          edge_cluster_path: f.edge_cluster_path || ''};
+            }
+            break;
+          case 's6d':
+          case 's6c':
+            endpoint = '/api/fix/create-ip-block';
+            payload  = {...base, name: f.name, cidr: f.cidr, excluded_ranges: f.excluded_ranges || ''};
+            break;
+          case 's7d':
+            endpoint = '/api/fix/configure-vpc-profile';
+            payload  = {...base,
+              project_id:            f.project_id || 'default',
+              tgw_path:              f.tgw_path,
+              ext_ip_block_path:     f.ext_ip_block_path,
+              cluster_path:          f.cluster_path,
+              private_ip_block_path: f.private_ip_block_path || ''
+            };
+            break;
+          case 's7c':
+            endpoint = '/api/fix/configure-vpc-profile';
+            payload  = {...base,
+              mode:                  'centralized',
+              tgw_path:              f.tgw_path || '',
+              ext_ip_block_path:     f.ext_ip_block_path,
+              cluster_path:          f.cluster_path,
+              private_ip_block_path: f.private_ip_block_path || ''
+            };
+            break;
+          default:
+            this.fixModal.result = {success: false, error: 'Unknown fix type'};
+            this.fixModal.step = 2;
+            return;
+        }
+
+        this.fixModal.loading = true;
+        this.fixModal.result  = null;
+        this.fixModal.step    = 2;
+
+        try {
+          const r = await fetch(endpoint, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+          });
+          this.fixModal.result = await r.json();
+        } catch(e) {
+          this.fixModal.result = {success: false, error: String(e)};
+        }
+
+        this.fixModal.loading = false;
+      },
+
+      // ── S7d reactive helpers ───────────────────────────────────────────────
+
+      s7dTgwChanged() {
+        const tgwPath  = this.fixModal.form.tgw_path;
+        const distTgws = (this.fixModal.options && this.fixModal.options.dist_tgws) || [];
+        const tgw      = distTgws.find(t => t.path === tgwPath);
+        const matching = (tgw && tgw.matching_ext_block_paths) || null;
+        const allExt   = (this.fixModal.options && this.fixModal.options.ext_ip_blocks) || [];
+        const filtered = matching ? allExt.filter(b => matching.includes(b.path)) : allExt;
+        this.fixModal.options = { ...this.fixModal.options, filtered_ext_blocks: filtered };
+        this.fixModal.form.ext_ip_block_path = filtered.length > 0 ? filtered[0].path : '';
+        const isDefaultTgw = tgwPath && tgwPath.trimEnd('/').split('/').pop() === 'default';
+        this.fixModal.form.vpc_profile_name = isDefaultTgw
+          ? 'Default VPC Connectivity Profile'
+          : 'vpc-dist-prof1';
+      },
+
+      async s7dProjectChanged() {
+        const projId = this.fixModal.form.project_id;
+        try {
+          const r = await fetch('/api/fix/vpc-profile-options', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              nsx_url:    this.form.nsx_url,
+              nsx_user:   this.form.nsx_user,
+              nsx_pass:   this.form.nsx_pass,
+              project_id: projId
+            })
+          });
+          const d = await r.json();
+          if (d.success) {
+            this.fixModal.options = { ...this.fixModal.options,
+              dist_tgws:        d.dist_tgws        || [],
+              private_ip_blocks: d.private_ip_blocks || []
+            };
+            const distTgws = d.dist_tgws || [];
+            this.fixModal.form.tgw_path = distTgws.length > 0 ? distTgws[0].path : '';
+            this.s7dTgwChanged();
+            const privs = d.private_ip_blocks || [];
+            this.fixModal.form.private_ip_block_path = privs.length > 0 ? privs[0].path : '';
+          }
+        } catch(e) { /* keep existing options on error */ }
+      },
+
+      async openVnaFix() {
+        this.vnaWizard.show    = true;
+        this.vnaWizard.step    = 0;
+        this.vnaWizard.options = null;
+        this.vnaWizard.result  = null;
+        this.vnaWizard.loading = false;
+        this.vnaWizard.deployStatus = null;
+        this.vnaWizard.form = {
+          port_group_id: '', cluster_moref: '', datastore_id: '',
+          ip1: '', ip2: '', prefix: 24, gateway: '', dns: '', ntp: '',
+          overlay_tz_path: ''
+        };
+        try {
+          const r = await fetch('/api/fix/vna-options', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              vc_url:   this.form.vc_url,
+              username: this.form.username,
+              password: this.form.password,
+              nsx_url:  this.form.nsx_url,
+              nsx_user: this.form.nsx_user,
+              nsx_pass: this.form.nsx_pass
+            })
+          });
+          const d = await r.json();
+          this.vnaWizard.options = d;
+          if (d.success) {
+            if (d.clusters && d.clusters.length >= 1)
+              this.vnaWizard.form.cluster_moref = d.clusters[0].cluster;
+            if (d.datastores && d.datastores.length >= 1)
+              this.vnaWizard.form.datastore_id = d.datastores[0].datastore;
+            if (d.vm_mgmt_dvpg)
+              this.vnaWizard.form.port_group_id = d.vm_mgmt_dvpg;
+            if (d.overlay_tz_path)
+              this.vnaWizard.form.overlay_tz_path = d.overlay_tz_path;
+            this.vnaWizard.form.prefix  = d.vc_prefix  || 24;
+            this.vnaWizard.form.gateway = d.vc_gateway || '';
+            this.vnaWizard.form.dns     = (d.vc_dns || []).join(', ');
+            this.vnaWizard.form.ntp     = (d.vc_ntp || []).join(', ');
+          }
+        } catch(e) {
+          this.vnaWizard.options = {success: false, error: String(e)};
+        }
+        this.vnaWizard.step = 1;
+      },
+
+      ipInSubnet(ip, cidr) {
+        try {
+          const [netIp, prefix] = cidr.split('/');
+          const p    = parseInt(prefix, 10);
+          const mask = p === 0 ? 0 : (~0 << (32 - p)) >>> 0;
+          const toInt = a => a.split('.').reduce((acc, x) => (acc << 8) + parseInt(x, 10), 0) >>> 0;
+          return (toInt(ip) & mask) === (toInt(netIp) & mask);
+        } catch { return true; }
+      },
+
+      vnaIpsSameSubnet() {
+        const opts = this.vnaWizard.options;
+        const f    = this.vnaWizard.form;
+        if (!opts || !opts.vc_subnet || !f.ip1 || !f.ip2) return true;
+        return this.ipInSubnet(f.ip1, opts.vc_subnet) &&
+               this.ipInSubnet(f.ip2, opts.vc_subnet);
+      },
+
+      vnaStep1Valid() {
+        const f = this.vnaWizard.form;
+        return !!(f.port_group_id && f.ip1 && f.ip2);
+      },
+
+      vnaEffectivePrefix()  {
+        return this.vnaIpsSameSubnet()
+          ? (this.vnaWizard.options && this.vnaWizard.options.vc_prefix) || 24
+          : this.vnaWizard.form.prefix;
+      },
+      vnaEffectiveGateway() {
+        return this.vnaIpsSameSubnet()
+          ? (this.vnaWizard.options && this.vnaWizard.options.vc_gateway) || ''
+          : this.vnaWizard.form.gateway;
+      },
+      vnaEffectiveDns() {
+        return this.vnaIpsSameSubnet()
+          ? ((this.vnaWizard.options && this.vnaWizard.options.vc_dns) || []).join(', ')
+          : this.vnaWizard.form.dns;
+      },
+      vnaEffectiveNtp() {
+        return this.vnaIpsSameSubnet()
+          ? ((this.vnaWizard.options && this.vnaWizard.options.vc_ntp) || []).join(', ')
+          : this.vnaWizard.form.ntp;
+      },
+
+      vnaNext() {
+        if (this.vnaWizard.step === 1) {
+          this.vnaWizard.step = this.vnaIpsSameSubnet() ? 3 : 2;
+        } else {
+          this.vnaWizard.step++;
+        }
+      },
+
+      async vnaCreate() {
+        this.vnaWizard.loading      = true;
+        this.vnaWizard.result       = null;
+        this.vnaWizard.deployStatus = null;
+        this.vnaWizard.step         = 4;
+        try {
+          const f    = this.vnaWizard.form;
+          const opts = this.vnaWizard.options || {};
+          const same = this.vnaIpsSameSubnet();
+          const r = await fetch('/api/fix/create-vna', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              vc_url:   this.form.vc_url,
+              username: this.form.username,
+              password: this.form.password,
+              nsx_url:  this.form.nsx_url,
+              nsx_user: this.form.nsx_user,
+              nsx_pass: this.form.nsx_pass,
+              port_group_id:      f.port_group_id,
+              cluster_moref:      f.cluster_moref || ((opts.clusters || [])[0] || {}).cluster || '',
+              datastore_id:       f.datastore_id  || ((opts.datastores || [])[0] || {}).datastore || '',
+              compute_manager_id: opts.compute_manager_id || '',
+              overlay_tz_path:    f.overlay_tz_path || opts.overlay_tz_path || '',
+              ip1:     f.ip1,
+              ip2:     f.ip2,
+              prefix:  same ? (opts.vc_prefix  || 24) : parseInt(f.prefix, 10),
+              gateway: same ?  opts.vc_gateway        : f.gateway,
+              dns:     same ? (opts.vc_dns || [])      : f.dns.split(',').map(s => s.trim()).filter(Boolean),
+              ntp:     same ? (opts.vc_ntp || [])      : f.ntp.split(',').map(s => s.trim()).filter(Boolean),
+              domain:  opts.domain || 'local'
+            })
+          });
+          this.vnaWizard.result = await r.json();
+          if (this.vnaWizard.result.success) {
+            setTimeout(() => this._pollVnaStatus(), 5000);
+          }
+        } catch(e) {
+          this.vnaWizard.result = {success: false, error: String(e)};
+        }
+        this.vnaWizard.loading = false;
+      },
+
+      async _pollVnaStatus() {
+        if (!this.vnaWizard.show || !this.vnaWizard.result?.success) return;
+        const clusterId = this.vnaWizard.result.cluster_id || 'vna-cluster-1';
+        try {
+          const r = await fetch('/api/fix/vna-status', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              vc_url:   this.form.vc_url,
+              nsx_url:  this.form.nsx_url,
+              nsx_user: this.form.nsx_user,
+              nsx_pass: this.form.nsx_pass,
+              cluster_id: clusterId
+            })
+          });
+          const d = await r.json();
+          if (d.success) this.vnaWizard.deployStatus = d;
+          const status = d.consolidated_status || '';
+          if (status === 'SUCCESS' || status === 'FAILED') return;
+        } catch(_) {}
+        setTimeout(() => this._pollVnaStatus(), 30000);
+      },
+      // ─────────────────────────────────────────────────────────────────
+    }
+  }
+  </script>
+
+</body>
+</html>
