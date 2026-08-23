@@ -6,7 +6,7 @@ This guide explains how to use the **vSphere Supervisor Readiness Check + Instal
 
 ## Interface Overview
 
-The web interface has three main sections, accessed top to bottom:
+The web interface uses the **[Clarity Design System](https://clarity.design)** (Broadcom's official design language) and has three main sections, accessed top to bottom:
 
 1. **Connection Details** — enter vCenter and NSX credentials
 2. **Check if Supervisor is Installed** — query the current state
@@ -45,7 +45,7 @@ Click **"Check if Supervisor is Installed"**.
 
 **Possible results:**
 
-- **Supervisor [name] is INSTALLED** (green banner) — Supervisor is running on this vCenter. The cluster name, config status, k8s status, and control plane VIP are shown.
+- **Supervisor [name] is INSTALLED** (green banner) — Supervisor is running on this vCenter. The cluster name, config status, k8s status, control plane VIP, and **network mode** (`NSX-VPC Distributed`, `NSX-VPC Centralized`, or `VDS / FLB`) are shown. The network mode is auto-detected by querying the NSX Transit Gateway attachment type via the NSX API.
 - **Supervisor is NOT installed** (blue banner) — The "Check Supervisor Requirements" button appears below.
 
 ---

@@ -103,9 +103,9 @@ systemctl enable --now supervisor-check
 ```
 Browser  ──────────────────────────────────────────────────  Flask app (port 80)
   │                                                               │
-  │   Alpine.js + Tailwind CSS UI                                 │
+  │   Clarity Design System + Alpine.js UI                        │
   │                                                               │
-  └──── GET /                          ◄── index.html (UI)        │
+  └──── GET /                          ◄── index_clarity.html     │
   └──── POST /api/check-installed      ◄── vCenter REST API       │
   └──── POST /api/check-requirements   ◄── vCenter + NSX APIs     │
   └──── POST /api/fix/*                ◄── NSX Policy API         │
@@ -118,11 +118,13 @@ Browser  ───────────────────────�
 - Automatic VCF 9.1 SSO domain detection for vCenter authentication
 - NSX credentials are passed per-request (never stored)
 
-**Frontend** (`app/templates/index.html`) — single-page app:
+**Frontend** (`app/templates/index_clarity.html`) — single-page app:
+- [Clarity Design System](https://clarity.design) (Broadcom's official design language) for UI components
 - Alpine.js for reactivity
-- Tailwind CSS for styling (CDN)
 - Font Awesome icons (CDN)
 - No build step required
+
+> The original Tailwind CSS version is preserved as `app/templates/index.html` for reference.
 
 ---
 
@@ -133,7 +135,8 @@ Supervisor_Intall_Tool/
 ├── app/
 │   ├── app.py                    # Flask backend — all API logic
 │   ├── templates/
-│   │   └── index.html            # Single-page frontend
+│   │   ├── index_clarity.html    # Default UI — Clarity Design System
+│   │   └── index.html            # Original UI — Tailwind CSS (reference)
 │   ├── requirements.txt          # Python dependencies
 │   └── supervisor-check.service  # systemd unit file
 ├── vsphere-supervisor-deployment.md  # VCF 9.1 deployment reference
