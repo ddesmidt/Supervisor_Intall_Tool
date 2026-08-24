@@ -2408,6 +2408,54 @@ def _vc_manage_ssh(vc_url, vc_user, vc_pass, host_fqdn, enable):
         return False, False
 
 
+def _collect_mtu_hosts(nsx_url, nsx_user, nsx_pass):
+    """Return list of dicts {id, name, short, healthy} from NSX HTNs."""
+    ep = "/policy/api/v1/infra/sites/default/enforcement-points/default"
+    htn_resp = nsx_get(nsx_url, nsx_user, nsx_pass, f"{ep}/host-transport-nodes")
+    htns     = (htn_resp or {}).get("results", [])
+    hosts = []
+    for h in htns:
+        hid  = h.get("id", "")
+        name = h.get("display_name", hid)
+        healthy = False
+        has_vmks = False
+        try:
+            st = nsx_get(nsx_url, nsx_user, nsx_pass,
+                         f"{ep}/host-transport-nodes/{hid}/state")
+            if (st or {}).get("state") == "success":
+                healthy = True
+            for hs in (st or {}).get("host_switch_states", []):
+                for ep2 in hs.get("endpoints", []):
+                    if ep2.get("ip") and "overlay" in ep2.get("net_stack_instance_key", "").lower():
+                        has_vmks = True
+        except Exception:
+            pass
+        hosts.append({
+            "id":      hid,
+            "name":    name,
+            "short":   name.split(".")[0] if "." in name else name,
+            "healthy": healthy,
+            "has_vmks": has_vmks,
+        })
+    return hosts
+
+
+@app.route("/api/mtu-hosts", methods=["POST"])
+def mtu_hosts():
+    """Return the list of ESX hosts available for MTU testing."""
+    body     = request.get_json(force=True)
+    nsx_raw  = (body.get("nsx_url") or "").strip()
+    vc_url   = normalize_url(body.get("vc_url", ""))
+    nsx_url  = normalize_url(nsx_raw) if nsx_raw else guess_nsx_url(vc_url)
+    nsx_user = body.get("nsx_user") or "admin"
+    nsx_pass = body.get("nsx_pass") or body.get("password") or ""
+    try:
+        hosts = _collect_mtu_hosts(nsx_url, nsx_user, nsx_pass)
+        return jsonify({"hosts": hosts})
+    except Exception as e:
+        return jsonify({"hosts": [], "error": str(e)})
+
+
 @app.route("/api/check-mtu", methods=["POST"])
 def check_mtu():
     """SSH into one ESX host per cluster and vmkping every TEP at the given MTU."""
@@ -2419,16 +2467,17 @@ def check_mtu():
                         "tests": [], "summary": ""})
 
     import socket as _socket
-    body     = request.get_json(force=True)
-    vc_url   = normalize_url(body.get("vc_url", ""))
-    vc_user  = body.get("username", "")
-    vc_pass  = body.get("password", "")
-    nsx_raw  = (body.get("nsx_url") or "").strip()
-    nsx_url  = normalize_url(nsx_raw) if nsx_raw else guess_nsx_url(vc_url)
-    nsx_user = body.get("nsx_user") or "admin"
-    nsx_pass = body.get("nsx_pass") or vc_pass
-    esx_pass = body.get("esx_pass") or ""
-    mtu_size = int(body.get("mtu_size") or 1600)
+    body        = request.get_json(force=True)
+    vc_url      = normalize_url(body.get("vc_url", ""))
+    vc_user     = body.get("username", "")
+    vc_pass     = body.get("password", "")
+    nsx_raw     = (body.get("nsx_url") or "").strip()
+    nsx_url     = normalize_url(nsx_raw) if nsx_raw else guess_nsx_url(vc_url)
+    nsx_user    = body.get("nsx_user") or "admin"
+    nsx_pass    = body.get("nsx_pass") or vc_pass
+    esx_pass    = body.get("esx_pass") or ""
+    mtu_size    = int(body.get("mtu_size") or 1600)
+    source_host = (body.get("source_host") or "").strip()   # optional: specific host name/id
 
     # Determine this VM's IP so we can mention it in error messages
     try:
@@ -2499,13 +2548,19 @@ def check_mtu():
             result["error"] = "No TEP IPs found. Check NSX credentials."
             return jsonify(result)
 
-        # ── pick one representative host per cluster ──────────────────────────
-        # Simple heuristic: first healthy host (good enough for single-cluster labs;
-        # for multi-cluster, we just test from first host of each group of 4).
-        healthy = [h for h in all_hosts if h.healthy and h.vmks]
-        if not healthy:
-            healthy = [h for h in all_hosts if h.vmks]
-        sources = healthy[:1] if healthy else []
+        # ── pick source host ──────────────────────────────────────────────────
+        if source_host:
+            # Use the host explicitly chosen by the user
+            sources = [h for h in all_hosts
+                       if h.name == source_host or h.short == source_host or h.id == source_host]
+            if not sources:
+                result["error"] = f"Host '{source_host}' not found in NSX Transport Nodes."
+                return jsonify(result)
+        else:
+            healthy = [h for h in all_hosts if h.healthy and h.vmks]
+            if not healthy:
+                healthy = [h for h in all_hosts if h.vmks]
+            sources = healthy[:1] if healthy else []
 
         if not sources:
             result["error"] = "No ESX host with NSX-overlay VMkernel interfaces found."

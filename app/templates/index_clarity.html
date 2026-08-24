@@ -750,10 +750,22 @@
 
                           <!-- Check MTU button — step 2, NSX columns only -->
                           <button x-show="check.step === '2' && col.key !== 'vds_flb'"
-                                  @click.stop="mtuModal.show = true; mtuModal.done = false; mtuModal.tests = []; mtuModal.error = null; mtuModal.summary = ''"
+                                  @click.stop="mtuModal.show = true; mtuModal.done = false; mtuModal.tests = []; mtuModal.error = null; mtuModal.summary = ''; mtuModal.colKey = col.key; fetchMtuHosts()"
                                   class="fix-badge"
-                                  style="background:#0072a3; color:#fff; border-color:#0072a3; margin-left:0.15rem;">
-                            <i class="fas fa-network-wired" style="margin-right:0.25rem;"></i>Check MTU
+                                  :style="{
+                                    marginLeft: '0.15rem',
+                                    color: '#fff',
+                                    background: mtuResult[col.key] === 'pass' ? '#48960c'
+                                              : mtuResult[col.key] === 'fail' ? '#c92100'
+                                              : '#89a0a8',
+                                    borderColor: mtuResult[col.key] === 'pass' ? '#48960c'
+                                               : mtuResult[col.key] === 'fail' ? '#c92100'
+                                               : '#89a0a8'
+                                  }">
+                            <i :class="mtuResult[col.key] === 'pass' ? 'fas fa-check-circle'
+                                      : mtuResult[col.key] === 'fail' ? 'fas fa-times-circle'
+                                      : 'fas fa-network-wired'"
+                               style="margin-right:0.25rem;"></i>Check MTU
                           </button>
 
                           <!-- Chevron -->
@@ -1331,7 +1343,7 @@
               <div class="clr-form-control" style="margin-bottom:0.75rem;">
                 <label class="clr-control-label" style="font-size:0.68rem;">Node 1 — Management IP</label>
                 <div class="clr-control-container"><div class="clr-input-wrapper">
-                  <input type="text" x-model="vnaWizard.form.ip1" placeholder="10.1.1.85" class="clr-input">
+                  <input type="text" x-model="vnaWizard.form.ip1" placeholder="" class="clr-input">
                 </div></div>
               </div>
             </div>
@@ -1339,7 +1351,7 @@
               <div class="clr-form-control" style="margin-bottom:0.75rem;">
                 <label class="clr-control-label" style="font-size:0.68rem;">Node 2 — Management IP</label>
                 <div class="clr-control-container"><div class="clr-input-wrapper">
-                  <input type="text" x-model="vnaWizard.form.ip2" placeholder="10.1.1.86" class="clr-input">
+                  <input type="text" x-model="vnaWizard.form.ip2" placeholder="" class="clr-input">
                 </div></div>
               </div>
             </div>
@@ -1365,15 +1377,6 @@
             </div>
           </template>
 
-          <p style="font-size:0.65rem; color:#6e777b; margin-top:0.25rem;">
-            vCenter management subnet:
-            <span style="font-family:monospace;" x-text="(vnaWizard.options && vnaWizard.options.vc_subnet) || 'unknown'"></span>
-          </p>
-          <p style="font-size:0.65rem; margin-top:0.15rem;">
-            vm-mgmt DVPG: <span style="font-family:monospace;"
-              :style="{ color: vnaWizard.options && vnaWizard.options.vm_mgmt_dvpg ? '#48960c' : '#e07400' }"
-              x-text="(vnaWizard.options && vnaWizard.options.vm_mgmt_dvpg) || '⚠ not found in TNC tags'"></span>
-          </p>
         </div>
 
         <!-- Step 2: Network Settings -->
@@ -2168,18 +2171,40 @@
                           padding:0.6rem 0.85rem; margin-bottom:1rem; font-size:0.82rem; color:#1a5276;">
                 <i class="fas fa-info-circle" style="margin-right:0.4rem;"></i>
                 This tool will:<br>
-                · Pick an ESX in the vCenter Cluster<br>
-                · <strong>Enable SSH temporarily</strong> on it if not already enabled<br>
+                · <strong>Enable SSH temporarily</strong> on the selected ESX if not already enabled<br>
                 · Run a large ping to test all its TEP tunnels<br>
                 · <strong>Disable SSH again automatically</strong> (if SSH was already enabled, it will be left as-is)
               </div>
+
+              <!-- ESX host selector -->
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">Source ESX Host</label>
+                <div class="clr-control-container">
+                  <template x-if="mtuModal.hostsLoading">
+                    <span style="font-size:0.8rem; color:#6e777b;">
+                      <i class="fas fa-circle-notch fa-spin" style="margin-right:0.3rem;"></i>Loading hosts…
+                    </span>
+                  </template>
+                  <template x-if="!mtuModal.hostsLoading">
+                    <div class="clr-select-wrapper">
+                      <select x-model="mtuModal.selectedHost" class="clr-select">
+                        <template x-for="h in mtuModal.hosts" :key="h.name">
+                          <option :value="h.name"
+                                  x-text="h.short + (h.healthy ? ' ✓' : ' ⚠')"></option>
+                        </template>
+                      </select>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
               <div class="clr-form-control" style="margin-bottom:0.75rem;">
                 <label class="clr-control-label" style="font-size:0.68rem;">ESX Root Password</label>
                 <div class="clr-control-container"><div class="clr-input-wrapper">
                   <input type="password" x-model="mtuModal.esx_pass"
                          placeholder="root password for ESX hosts"
                          class="clr-input"
-                         @keydown.enter="mtuModal.esx_pass && runMtuCheck()">
+                         @keydown.enter="mtuModal.esx_pass && mtuModal.selectedHost && runMtuCheck()">
                 </div></div>
               </div>
               <div class="clr-form-control">
@@ -2275,7 +2300,7 @@
           <button @click="mtuModal.show = false" class="btn btn-outline btn-sm">Close</button>
           <template x-if="!mtuModal.loading && !mtuModal.done">
             <button @click="runMtuCheck()"
-                    :disabled="!mtuModal.esx_pass"
+                    :disabled="!mtuModal.esx_pass || !mtuModal.selectedHost"
                     class="btn btn-primary btn-sm">
               <i class="fas fa-play" style="margin-right:0.3rem;"></i>Run Test
             </button>
@@ -2321,8 +2346,13 @@
       mtuModal: {
         show: false, loading: false, done: false,
         esx_pass: '', mtu_size: 1600,
-        tests: [], error: null, summary: ''
+        tests: [], error: null, summary: '',
+        colKey: '',          // which column opened the modal
+        hosts: [],           // [{name, short, healthy}] populated on open
+        hostsLoading: false,
+        selectedHost: ''     // host name chosen by user
       },
+      mtuResult: {},   // colKey → 'pass' | 'fail' | null
 
       // ── Install Wizard ─────────────────────────────────────────────────
       showInstallWizard: false,
@@ -2981,6 +3011,29 @@
           : 'vpc-dist-prof1';
       },
 
+      async fetchMtuHosts() {
+        const m = this.mtuModal;
+        m.hosts = []; m.selectedHost = ''; m.hostsLoading = true;
+        try {
+          const r = await fetch('/api/mtu-hosts', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(this.form)
+          });
+          const d = await r.json();
+          m.hosts = d.hosts || [];
+          // Auto-select: prefer healthy hosts with vmks, otherwise first host
+          const best = m.hosts.find(h => h.healthy && h.has_vmks)
+                    || m.hosts.find(h => h.has_vmks)
+                    || m.hosts[0];
+          if (best) m.selectedHost = best.name;
+        } catch(e) {
+          m.hosts = [];
+        } finally {
+          m.hostsLoading = false;
+        }
+      },
+
       async runMtuCheck() {
         const m = this.mtuModal;
         m.loading = true; m.done = false; m.tests = []; m.error = null; m.summary = '';
@@ -2990,8 +3043,9 @@
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
               ...this.form,
-              esx_pass: m.esx_pass,
-              mtu_size: m.mtu_size,
+              esx_pass:    m.esx_pass,
+              mtu_size:    m.mtu_size,
+              source_host: m.selectedHost,
             })
           });
           const d = await r.json();
@@ -3003,6 +3057,11 @@
         } finally {
           m.loading = false;
           m.done    = true;
+          // Record pass/fail on the button that triggered the test
+          if (m.colKey) {
+            this.mtuResult[m.colKey] = (m.error || m.tests.some(t => !t.success))
+              ? 'fail' : 'pass';
+          }
         }
       },
 
