@@ -81,6 +81,20 @@ Steps that the tool can remediate show a **"Fix"** button. Clicking it opens a g
 
 Steps the tool cannot automate (e.g. Edge Cluster + Tier-0 for Centralized mode) show an **info popup** with a link to the relevant VMware blog post.
 
+### Check MTU Button
+
+S2 (NSX Host Preparation) also shows a **"Check MTU"** button in the NSX columns. NSX overlay networking requires MTU ≥ 1700 on the physical fabric — use this to verify before deploying.
+
+Clicking it opens a wizard that:
+1. Prompts for the **ESX root password**
+2. Picks one ESX host from the cluster
+3. **Temporarily enables SSH** on that host via vCenter SOAP (if not already enabled)
+4. Runs large ICMP pings to each TEP tunnel peer to test the path
+5. Shows per-tunnel **pass / fail** results
+6. **Restores SSH** to its original state automatically
+
+If any tunnel shows as failed, the physical switch ports or vDS uplinks MTU needs to be raised to at least 1700 bytes before proceeding.
+
 ---
 
 ## Step 4 — Fixing Prerequisites

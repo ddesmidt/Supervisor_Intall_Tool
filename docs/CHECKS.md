@@ -53,15 +53,32 @@ The tool sends a `POST /api/session` to vCenter. In VCF 9.1 environments, the WL
 
 **APIs used:**
 - NSX Policy: `GET /policy/api/v1/infra/sites/default/enforcement-points/default/transport-node-collections` — lists Transport Node Collections (TNCs, one per vSphere cluster)
-- NSX Policy: `GET /policy/api/v1/infra/sites/default/enforcement-points/default/host-transport-nodes` — counts prepared hosts
+- NSX Policy: `GET /policy/api/v1/infra/sites/default/enforcement-points/default/host-transport-nodes` — lists prepared hosts
+- NSX Policy: `GET /…/host-transport-nodes/{id}/state` — per-host deployment state
 - NSX Manager: `GET /api/v1/fabric/compute-collections` — resolves TNC UUIDs to human-readable cluster names
 
 **What is displayed when green:**
 ```
-· cluster-wld01-01a: SUCCESS
+· esx-01: SUCCESS
+· esx-02: SUCCESS
+· esx-03: SUCCESS
+· esx-04: SUCCESS
 ```
 
+If any host has issues the step shows ⚠️ Amber with a summary such as `3/4 hosts healthy — 1 host(s) with issues`, and the expanded detail shows the state and failure message for the affected host(s).
+
 **Fix:** Not automated — NSX host preparation is done via SDDC Manager or NSX Manager UI.
+
+**Check MTU button:**
+A **"Check MTU"** button appears on S2 for NSX columns. Clicking it opens a wizard that:
+1. Prompts for the ESX root password
+2. Picks one ESX host from the cluster
+3. Temporarily enables SSH on that host via vCenter SOAP (if not already enabled)
+4. Runs large ICMP pings (`ping -s 1672`) to each TEP tunnel peer to verify the physical fabric supports MTU ≥ 1700 (required for NSX overlay)
+5. Displays per-tunnel pass/fail results
+6. Restores SSH to its original state (disabled if it was disabled before)
+
+> NSX overlay requires MTU ≥ 1700 on the physical network. If any tunnel ping fails, the physical switch ports or vDS uplinks need their MTU raised.
 
 ---
 
