@@ -325,6 +325,20 @@ def check_requirements():
             htn = nsx_get(nsx_url, nsx_user, nsx_pass,
                 "/policy/api/v1/infra/sites/default/enforcement-points/default/host-transport-nodes")
             d["htn"] = (htn or {}).get("results", [])
+            # Fetch per-host /state to detect disconnected/failed hosts
+            _htn_ep = ("/policy/api/v1/infra/sites/default/enforcement-points"
+                       "/default/host-transport-nodes")
+            htn_states: dict = {}
+            for _h in d["htn"][:50]:
+                _hid = _h.get("id", "")
+                if _hid:
+                    try:
+                        _st = nsx_get(nsx_url, nsx_user, nsx_pass,
+                                      f"{_htn_ep}/{_hid}/state")
+                        htn_states[_hid] = _st or {}
+                    except Exception:
+                        pass
+            d["htn_states"] = htn_states
         except Exception as e:
             d["tnc"] = []; d["htn"] = []; d["tep_error"] = str(e)
 
@@ -513,26 +527,54 @@ def check_requirements():
             elif d.get("tnc") or d.get("htn"):
                 tncs            = d.get("tnc", [])
                 htns            = d.get("htn", [])
+                htn_states      = d.get("htn_states", {})
                 tnc_cluster_map = d.get("tnc_cluster_map", {})
-                total_hosts     = len(htns)
 
                 cluster_names = []
-                detail_lines  = []
                 for t in tncs:
                     tid   = t.get("id", "")
                     cname = tnc_cluster_map.get(tid) or t.get("display_name") or tid
-                    # TNC state is unreliable in NSX 4.x — use total HTN count
-                    # (split evenly if multiple TNCs, exact if only one)
-                    count = total_hosts if len(tncs) == 1 else total_hosts // len(tncs)
                     cluster_names.append(cname)
-                    detail_lines.append(f"· {cname}: SUCCESS")
-
                 if not cluster_names:
                     cluster_names = ["(unknown)"]
-                    detail_lines  = ["· (unknown): SUCCESS"]
 
-                add("2", "NSX Host Preparation", "ok",
-                    f"vCenter Clusters hosts prepared — {', '.join(cluster_names)}",
+                # Per-host state lines
+                detail_lines = []
+                fail_count   = 0
+                for h in htns:
+                    hid   = h.get("id", "")
+                    hname = h.get("display_name", hid)
+                    short = hname.split(".")[0] if "." in hname else hname
+                    st    = htn_states.get(hid, {})
+                    if st:
+                        dstate  = (st.get("node_deployment_state") or {}).get("state", "unknown")
+                        overall = st.get("state", dstate)
+                        if overall == "success":
+                            detail_lines.append(f"· {short}: SUCCESS")
+                        else:
+                            state_label = dstate.upper()
+                            fail_msg    = (st.get("failure_message") or "").split(".")[0]
+                            if fail_msg:
+                                detail_lines.append(f"· {short}: {state_label} — {fail_msg}")
+                            else:
+                                detail_lines.append(f"· {short}: {state_label}")
+                            fail_count += 1
+                    else:
+                        # No state data (e.g. state fetch failed) — assume ok
+                        detail_lines.append(f"· {short}: SUCCESS")
+
+                total = len(htns)
+                if fail_count == 0:
+                    step_status = "ok"
+                    subtitle    = f"vCenter Clusters hosts prepared — {', '.join(cluster_names)}"
+                else:
+                    step_status = "warning"
+                    ok_count    = total - fail_count
+                    subtitle    = (f"{ok_count}/{total} hosts healthy in "
+                                   f"{', '.join(cluster_names)} — "
+                                   f"{fail_count} host(s) with issues")
+
+                add("2", "NSX Host Preparation", step_status, subtitle,
                     "\n".join(detail_lines))
             else:
                 add("2", "NSX Host Preparation", "error",
@@ -906,7 +948,8 @@ def check_requirements():
                         lines.append(f"  TGW: {tgw}")
                         lines.append(f"  External IP Block: {ext_b}")
                         lines.append(f"  {cluster_label}: {clu}")
-                        lines.append(f"  N/S Services: enabled   Outbound NAT: enabled")
+                        lines.append(f"  N/S Services: enabled")
+                        lines.append(f"  Outbound NAT: enabled")
                     subtitle = (f"1 valid VPC Connectivity Profile: {valid_vcps[0].get('display_name', valid_vcps[0].get('id','?'))}"
                                 if len(valid_vcps) == 1
                                 else f"{len(valid_vcps)} valid VPC Connectivity Profile(s)")
@@ -1637,10 +1680,13 @@ def fix_create_vna():
     nsx_headers = {"Content-Type": "application/json", "Accept": "application/json"}
 
     def nsx_put(path, payload):
-        # Use a fresh session for each PUT to avoid SSL session reuse issues
         r = requests.put(f"{nsx_url}{path}", auth=(nsx_user, nsx_pass),
                          headers=nsx_headers, json=payload, verify=False, timeout=30)
         return r
+
+    def nsx_get_raw(path):
+        return requests.get(f"{nsx_url}{path}", auth=(nsx_user, nsx_pass),
+                            headers=nsx_headers, verify=False, timeout=15)
 
     def extract_error(r):
         try:
@@ -1654,7 +1700,18 @@ def fix_create_vna():
             return f"HTTP {r.status_code}: {r.text[:500]}"
 
     try:
+        # Find a free cluster ID — skip any objects still marked for deletion
         cluster_id = "vna-cluster-1"
+        for _suffix in range(1, 20):
+            _cid  = f"vna-cluster-{_suffix}"
+            _rc   = nsx_get_raw(f"{base}/{_cid}")
+            if _rc.status_code == 404:
+                cluster_id = _cid
+                break
+            if _rc.ok and _rc.json().get("marked_for_delete"):
+                continue  # still being purged — try next suffix
+            cluster_id = _cid  # exists and healthy, or unknown error; just use it
+            break
 
         # ── Step 1: create the cluster object ────────────────────────────
         cluster_payload = {
@@ -1671,7 +1728,14 @@ def fix_create_vna():
         }
         r1 = nsx_put(f"{base}/{cluster_id}", cluster_payload)
         if not r1.ok:
-            result["error"] = f"[Create cluster] {extract_error(r1)}"
+            if r1.status_code == 400 and "marked for deletion" in r1.text:
+                result["error"] = (
+                    f"NSX object '{cluster_id}' was recently deleted and is still "
+                    f"being purged (up to 5 minutes). Please wait a few minutes "
+                    f"and try again."
+                )
+            else:
+                result["error"] = f"[Create cluster] {extract_error(r1)}"
             return jsonify(result)
 
         # ── Step 2: create each node ──────────────────────────────────────
@@ -1825,12 +1889,28 @@ def fix_nsx_prereq_options():
                                         for v in _list(
                                             "/policy/api/v1/infra/sites/default/enforcement-points"
                                             "/default/virtual-network-appliance-clusters")]
-        result["edge_clusters"]     = [_to_item(e)
-                                        for e in _list(
-                                            "/policy/api/v1/infra/sites/default/enforcement-points"
-                                            "/default/edge-clusters")]
-        result["t0s"]               = [_to_item(t)
-                                        for t in _list("/policy/api/v1/infra/tier-0s")]
+        # Build edge-cluster path → T0 name mapping via T0 locale-services
+        _ec_to_t0: dict = {}
+        _t0_raw = _list("/policy/api/v1/infra/tier-0s")
+        for _t0 in _t0_raw:
+            _t0_id   = _t0.get("id", "")
+            _t0_name = _t0.get("display_name", _t0_id)
+            try:
+                _ls = nsx_get(nsx_url, nsx_user, nsx_pass,
+                              f"/policy/api/v1/infra/tier-0s/{_t0_id}/locale-services")
+                for _s in (_ls or {}).get("results", []):
+                    _ec_path = _s.get("edge_cluster_path", "")
+                    if _ec_path:
+                        _ec_to_t0[_ec_path] = _t0_name
+            except Exception:
+                pass
+        _ec_items = []
+        for _e in _list("/policy/api/v1/infra/sites/default/enforcement-points/default/edge-clusters"):
+            _item = _to_item(_e)
+            _item["t0_name"] = _ec_to_t0.get(_e.get("path", ""), "")
+            _ec_items.append(_item)
+        result["edge_clusters"] = _ec_items
+        result["t0s"]           = [_to_item(t) for t in _t0_raw]
         result["vpc_profile"]       = nsx_get(nsx_url, nsx_user, nsx_pass,
                                               "/policy/api/v1/orgs/default/projects/default"
                                               "/vpc-connectivity-profiles/default")
@@ -2212,6 +2292,339 @@ def fix_configure_vpc_profile():
             result["error"] = _nsx_error(r)
     except Exception as e:
         result["error"] = traceback.format_exc()
+    return jsonify(result)
+
+
+# ── vCenter SOAP helpers for SSH service management ──────────────────────────
+
+def _soap_session(vc_url, vc_user, vc_pass):
+    """Open a vCenter SOAP session. Returns (requests.Session, endpoint, headers)."""
+    ep  = f"{vc_url}/sdk"
+    hdr = {"Content-Type": "text/xml; charset=UTF-8"}
+    s   = requests.Session()
+    r   = s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+        '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<Body><Login xmlns="urn:vim25">'
+        '<_this type="SessionManager">SessionManager</_this>'
+        f'<userName>{vc_user}</userName><password>{vc_pass}</password>'
+        '</Login></Body></Envelope>'))
+    if not r.ok or "Fault" in r.text:
+        raise RuntimeError(f"SOAP login failed ({r.status_code})")
+    return s, ep, hdr
+
+
+def _soap_find_host(s, ep, hdr, fqdn):
+    """Return HostSystem MoRef for the given FQDN, or None."""
+    r = s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+        '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<Body><FindByDnsName xmlns="urn:vim25">'
+        '<_this type="SearchIndex">SearchIndex</_this>'
+        f'<dnsName>{fqdn}</dnsName><vmSearch>false</vmSearch>'
+        '</FindByDnsName></Body></Envelope>'))
+    import re as _re
+    m = _re.search(r'type="HostSystem"[^>]*>([^<]+)<', r.text)
+    return m.group(1).strip() if m else None
+
+
+def _soap_get_service_system(s, ep, hdr, host_moref):
+    """Return HostServiceSystem MoRef for a host.
+
+    Uses RetrieveProperties (not Ex) with propSet — the Ex variant and the
+    old propSpec element name both cause vCenter to return HTTP 500.
+    """
+    r = s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+        '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<Body><RetrieveProperties xmlns="urn:vim25">'
+        '<_this type="PropertyCollector">propertyCollector</_this>'
+        '<specSet>'
+        '<propSet><type>HostSystem</type><all>false</all>'
+        '<pathSet>configManager.serviceSystem</pathSet></propSet>'
+        f'<objectSet><obj type="HostSystem">{host_moref}</obj></objectSet>'
+        '</specSet>'
+        '</RetrieveProperties></Body></Envelope>'))
+    import re as _re
+    m = _re.search(r'type="HostServiceSystem"[^>]*>([^<]+)<', r.text)
+    return m.group(1).strip() if m else None
+
+
+def _soap_get_ssh_state(s, ep, hdr, svc_moref):
+    """Return True if SSH (TSM-SSH) is currently running on the host."""
+    r = s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+        '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<Body><RetrieveProperties xmlns="urn:vim25">'
+        '<_this type="PropertyCollector">propertyCollector</_this>'
+        '<specSet>'
+        '<propSet><type>HostServiceSystem</type><all>false</all>'
+        '<pathSet>serviceInfo</pathSet></propSet>'
+        f'<objectSet><obj type="HostServiceSystem">{svc_moref}</obj></objectSet>'
+        '</specSet>'
+        '</RetrieveProperties></Body></Envelope>'))
+    import re as _re
+    m = _re.search(r'<key>TSM-SSH</key>.*?<running>(.*?)</running>', r.text, _re.S)
+    return m.group(1).strip().lower() == 'true' if m else False
+
+
+def _soap_set_ssh(s, ep, hdr, svc_moref, enable):
+    """Start or stop SSH (TSM-SSH) on an ESX host. Returns ok (bool)."""
+    action = "StartService" if enable else "StopService"
+    r = s.post(ep, verify=False, timeout=30, headers=hdr, data=(
+        '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+        f'<Body><{action} xmlns="urn:vim25">'
+        f'<_this type="HostServiceSystem">{svc_moref}</_this>'
+        f'<id>TSM-SSH</id>'
+        f'</{action}></Body></Envelope>'))
+    return "Fault" not in r.text
+
+
+def _vc_manage_ssh(vc_url, vc_user, vc_pass, host_fqdn, enable):
+    """
+    Enable or disable SSH on an ESX host via vCenter SOAP.
+    Returns (success, was_already_in_desired_state).
+    """
+    try:
+        s, ep, hdr = _soap_session(vc_url, vc_user, vc_pass)
+        moref = _soap_find_host(s, ep, hdr, host_fqdn)
+        if not moref:
+            return False, False
+        svc = _soap_get_service_system(s, ep, hdr, moref)
+        if not svc:
+            return False, False
+        # Check current state first to avoid unnecessary calls
+        currently_running = _soap_get_ssh_state(s, ep, hdr, svc)
+        if currently_running == enable:
+            return True, True   # already in desired state
+        ok = _soap_set_ssh(s, ep, hdr, svc, enable)
+        # Logout (best-effort)
+        try:
+            s.post(ep, verify=False, timeout=10, headers=hdr, data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><Logout xmlns="urn:vim25">'
+                '<_this type="SessionManager">SessionManager</_this>'
+                '</Logout></Body></Envelope>'))
+        except Exception:
+            pass
+        return ok, False
+    except Exception:
+        return False, False
+
+
+@app.route("/api/check-mtu", methods=["POST"])
+def check_mtu():
+    """SSH into one ESX host per cluster and vmkping every TEP at the given MTU."""
+    import re as _re
+    try:
+        import paramiko as _paramiko
+    except ImportError:
+        return jsonify({"error": "paramiko not installed on server (apt install python3-paramiko)",
+                        "tests": [], "summary": ""})
+
+    import socket as _socket
+    body     = request.get_json(force=True)
+    vc_url   = normalize_url(body.get("vc_url", ""))
+    vc_user  = body.get("username", "")
+    vc_pass  = body.get("password", "")
+    nsx_raw  = (body.get("nsx_url") or "").strip()
+    nsx_url  = normalize_url(nsx_raw) if nsx_raw else guess_nsx_url(vc_url)
+    nsx_user = body.get("nsx_user") or "admin"
+    nsx_pass = body.get("nsx_pass") or vc_pass
+    esx_pass = body.get("esx_pass") or ""
+    mtu_size = int(body.get("mtu_size") or 1600)
+
+    # Determine this VM's IP so we can mention it in error messages
+    try:
+        vm_ip = _socket.gethostbyname(_socket.gethostname())
+    except Exception:
+        vm_ip = "this VM"
+
+    result = {"tests": [], "summary": "", "error": None}
+    ep = "/policy/api/v1/infra/sites/default/enforcement-points/default"
+
+    try:
+        # ── collect HTNs ──────────────────────────────────────────────────────
+        htn_resp = nsx_get(nsx_url, nsx_user, nsx_pass, f"{ep}/host-transport-nodes")
+        htns     = (htn_resp or {}).get("results", [])
+        if not htns:
+            result["error"] = "No Host Transport Nodes found via NSX API."
+            return jsonify(result)
+
+        # ── per-host: TEP vmk interfaces + overall health ─────────────────────
+        class _H:
+            def __init__(self, hid, name):
+                self.id      = hid
+                self.name    = name
+                self.short   = name.split(".")[0] if "." in name else name
+                self.vmks    = []   # [{"vmk": str, "ip": str}]
+                self.healthy = False
+
+        all_hosts: list = []
+        all_teps:  list = []   # [{"ip": str, "host": str}]  ← all TEP IPs (ESX + Edge)
+
+        for h in htns:
+            hid  = h.get("id", "")
+            obj  = _H(hid, h.get("display_name", hid))
+            try:
+                st = nsx_get(nsx_url, nsx_user, nsx_pass,
+                             f"{ep}/host-transport-nodes/{hid}/state")
+                if (st or {}).get("state") == "success":
+                    obj.healthy = True
+                for hs in (st or {}).get("host_switch_states", []):
+                    for ep2 in hs.get("endpoints", []):
+                        ip    = ep2.get("ip", "")
+                        vmk   = ep2.get("device_name", "")
+                        stack = ep2.get("net_stack_instance_key", "")
+                        if ip and vmk and "overlay" in stack.lower():
+                            obj.vmks.append({"vmk": vmk, "ip": ip})
+                            all_teps.append({"ip": ip, "host": obj.short})
+            except Exception:
+                pass
+            all_hosts.append(obj)
+
+        # ── add Edge node TEPs as targets ─────────────────────────────────────
+        try:
+            edge_resp = nsx_get(nsx_url, nsx_user, nsx_pass, f"{ep}/edge-transport-nodes")
+            for e in (edge_resp or {}).get("results", []):
+                eid  = e.get("id", "")
+                ename = e.get("display_name", eid).split(".")[0]
+                est   = nsx_get(nsx_url, nsx_user, nsx_pass,
+                                f"{ep}/edge-transport-nodes/{eid}/state")
+                for hs in (est or {}).get("host_switch_states", []):
+                    for ep3 in hs.get("endpoints", []):
+                        ip = ep3.get("ip", "")
+                        if ip:
+                            all_teps.append({"ip": ip, "host": ename})
+        except Exception:
+            pass
+
+        if not all_teps:
+            result["error"] = "No TEP IPs found. Check NSX credentials."
+            return jsonify(result)
+
+        # ── pick one representative host per cluster ──────────────────────────
+        # Simple heuristic: first healthy host (good enough for single-cluster labs;
+        # for multi-cluster, we just test from first host of each group of 4).
+        healthy = [h for h in all_hosts if h.healthy and h.vmks]
+        if not healthy:
+            healthy = [h for h in all_hosts if h.vmks]
+        sources = healthy[:1] if healthy else []
+
+        if not sources:
+            result["error"] = "No ESX host with NSX-overlay VMkernel interfaces found."
+            return jsonify(result)
+
+        # ── run vmkping from each source host ─────────────────────────────────
+        tests      = []
+        fail_count = 0
+        import time as _time
+
+        for src in sources:
+            # ── 1. Enable SSH via vCenter SOAP (if vCenter creds provided) ────
+            ssh_we_enabled = False
+            ssh_note       = ""
+            if vc_url and vc_user and vc_pass:
+                ok, already = _vc_manage_ssh(vc_url, vc_user, vc_pass,
+                                             src.name, enable=True)
+                if ok and not already:
+                    ssh_we_enabled = True
+                    _time.sleep(3)   # initial wait for sshd to start
+                elif already:
+                    ssh_note = "SSH was already enabled"
+                else:
+                    ssh_note = "Could not enable SSH via vCenter — trying anyway"
+
+            # ── 2. SSH + vmkping ───────────────────────────────────────────────
+            ssh = _paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
+
+            # Retry loop: sshd can take up to ~10s to start after being enabled
+            _max_attempts = 6   # × 2s = 12s max wait
+            _last_err     = None
+            for _attempt in range(_max_attempts):
+                try:
+                    ssh.connect(src.name, username="root", password=esx_pass,
+                                timeout=10, banner_timeout=15,
+                                allow_agent=False, look_for_keys=False)
+                    _last_err = None
+                    break   # connected successfully
+                except _paramiko.AuthenticationException:
+                    result["error"] = (f"SSH authentication failed for {src.name} — "
+                                       f"check ESX root password.")
+                    return jsonify(result)
+                except Exception as _e:
+                    _last_err = _e
+                    _es = str(_e).lower()
+                    # "Unable to connect" / "Errno None" → sshd not ready yet → retry
+                    if ("unable to connect" in _es or "errno none" in _es
+                            or "connection refused" in _es):
+                        if _attempt < _max_attempts - 1:
+                            _time.sleep(2)
+                            continue
+                    break   # other error — don't retry
+
+            if _last_err:
+                _es = str(_last_err).lower()
+                if ("unable to connect" in _es or "errno none" in _es
+                        or "connection refused" in _es or "timed out" in _es):
+                    result["error"] = (
+                        f"Cannot reach {src.short} via SSH from this VM ({vm_ip}). "
+                        f"Port 22 may be blocked by a firewall between "
+                        f"{vm_ip} and {src.name}.")
+                else:
+                    result["error"] = f"SSH to {src.name} failed: {_last_err}"
+                return jsonify(result)
+
+            for vmk_info in src.vmks:
+                vmk    = vmk_info["vmk"]
+                src_ip = vmk_info["ip"]
+                for tgt in all_teps:
+                    tgt_ip   = tgt["ip"]
+                    tgt_host = tgt["host"]
+                    if tgt_ip == src_ip:
+                        continue
+                    cmd = (f"vmkping -I {vmk} -S vxlan -d -s {mtu_size} "
+                           f"-c 2 {tgt_ip} 2>&1")
+                    try:
+                        _, stdout, _ = ssh.exec_command(cmd, timeout=12)
+                        out = stdout.read().decode("utf-8", errors="replace")
+                        ok  = ("0% packet loss" in out or
+                               "0.0% packet loss" in out)
+                        lat = ""
+                        for line in out.splitlines():
+                            m = _re.search(r"time=(\S+)", line)
+                            if m:
+                                lat = m.group(1) + " ms"
+                                break
+                    except Exception as ex:
+                        out = str(ex)
+                        ok  = False
+                        lat = ""
+                    tests.append({
+                        "from_host": src.short,
+                        "from_vmk":  vmk,
+                        "from_ip":   src_ip,
+                        "to_host":   tgt_host,
+                        "to_ip":     tgt_ip,
+                        "success":   ok,
+                        "latency":   lat,
+                    })
+                    if not ok:
+                        fail_count += 1
+            ssh.close()
+
+            # ── 3. Disable SSH if we enabled it ───────────────────────────────
+            if ssh_we_enabled and vc_url and vc_user and vc_pass:
+                _vc_manage_ssh(vc_url, vc_user, vc_pass, src.name, enable=False)
+
+        result["tests"] = tests
+        if not tests:
+            result["error"] = "No tests ran — nothing to ping."
+        elif fail_count == 0:
+            result["summary"] = f"All {len(tests)} MTU {mtu_size} tests PASSED"
+        else:
+            result["summary"] = f"{fail_count} of {len(tests)} MTU tests FAILED"
+
+    except Exception:
+        result["error"] = traceback.format_exc()
+
     return jsonify(result)
 
 

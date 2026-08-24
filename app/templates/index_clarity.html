@@ -574,7 +574,7 @@
                 <template x-for="col in [
                   { key: 'distributed', label: 'NSX-VPC\u00a0Distributed', badge: 'Simple \u00b7 Recommended', icon: 'fa-network-wired', mode: 'NSX-VPC Distributed' },
                   { key: 'centralized', label: 'NSX-VPC\u00a0Centralized', badge: 'Advanced',                  icon: 'fa-circle-nodes',  mode: 'NSX-VPC Centralized' },
-                  { key: 'vds_flb',     label: 'VDS\u00a0/\u00a0FLB',      badge: 'No NSX',                    icon: 'fa-ethernet',      mode: 'VDS / FLB'          }
+                  { key: 'vds_flb',     label: 'VDS',                       badge: 'No NSX',                    icon: 'fa-ethernet',      mode: 'VDS / FLB'          }
                 ]" :key="col.key">
                   <div class="card" style="display:flex; flex-direction:column;"
                        :style="installResult.clusters.some(c => c.network_mode === col.mode)
@@ -654,7 +654,7 @@
               <template x-for="col in [
                 { key: 'distributed', label: 'NSX-VPC Distributed', badge: 'Simple \u00b7 Recommended', icon: 'fa-network-wired' },
                 { key: 'centralized', label: 'NSX-VPC Centralized', badge: 'Advanced',                  icon: 'fa-circle-nodes'  },
-                { key: 'vds_flb',     label: 'VDS / FLB',           badge: 'No NSX',                    icon: 'fa-ethernet'      }
+                { key: 'vds_flb',     label: 'VDS',                  badge: 'No NSX',                    icon: 'fa-ethernet'      }
               ]" :key="col.key">
                 <div class="card" style="display:flex; flex-direction:column; height:100%;">
 
@@ -748,6 +748,14 @@
                                   @click.stop="check.expanded = true; $dispatch('fix-step', {step: check.step, mode: col.key})"
                                   class="fix-badge">Fix</button>
 
+                          <!-- Check MTU button — step 2, NSX columns only -->
+                          <button x-show="check.step === '2' && col.key !== 'vds_flb'"
+                                  @click.stop="mtuModal.show = true; mtuModal.done = false; mtuModal.tests = []; mtuModal.error = null; mtuModal.summary = ''"
+                                  class="fix-badge"
+                                  style="background:#0072a3; color:#fff; border-color:#0072a3; margin-left:0.15rem;">
+                            <i class="fas fa-network-wired" style="margin-right:0.25rem;"></i>Check MTU
+                          </button>
+
                           <!-- Chevron -->
                           <span x-show="check.details" class="chevron" :class="check.expanded ? 'open' : ''">
                             <i class="fas fa-chevron-down"></i>
@@ -818,7 +826,8 @@
                 <div style="display:flex; align-items:center; gap:0.5rem;">
                   <i class="fas fa-rocket" style="color:#0072a3;"></i>
                   <span style="font-weight:700; font-size:0.82rem; text-transform:uppercase; letter-spacing:.03em;">
-                    Deploy Supervisor — NSX VPC Mode
+                    Deploy Supervisor —
+                    <span x-text="wizardDeployMode === 'centralized' ? 'NSX VPC Centralized Mode' : 'NSX VPC Distributed Mode'"></span>
                   </span>
                 </div>
                 <button @click="showInstallWizard = false; wizardStep = 0" type="button"
@@ -1061,7 +1070,7 @@
                   <div class="alert-items"><div class="alert-item static">
                     <span class="alert-text">
                       <i class="fas fa-circle-info" style="margin-right:0.25rem;"></i>
-                      Workload network: <strong>NSX VPC mode</strong>
+                      Workload network: <strong x-text="wizardDeployMode === 'centralized' ? 'NSX VPC Centralized Mode' : 'NSX VPC Distributed Mode'"></strong>
                       &nbsp;·&nbsp; Service CIDR: <span style="font-family:monospace;">10.96.0.0/12</span>
                       &nbsp;·&nbsp; Private workload CIDR: <span style="font-family:monospace;">172.30.0.0/16</span>
                     </span>
@@ -1816,6 +1825,29 @@
                          class="clr-input">
                 </div></div>
               </div>
+              <!-- S6D only: dropdown when multiple Distributed External Connections exist -->
+              <template x-if="fixModal.type === 's6d' && (fixModal.form.dvlan_list || []).length > 1">
+                <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                  <label class="clr-control-label" style="font-size:0.68rem;">
+                    Distributed External Connection
+                  </label>
+                  <div class="clr-control-container"><div class="clr-select-wrapper">
+                    <select x-model="fixModal.form.dvlan_sel_path"
+                            @change="s6dDvlanChanged()"
+                            class="clr-select">
+                      <template x-for="dv in fixModal.form.dvlan_list" :key="dv.path || dv.id">
+                        <option :value="dv.path || dv.id"
+                                x-text="(dv.display_name || dv.id) + (dv.vlan_id ? ' (VLAN ' + dv.vlan_id + ')' : '')">
+                        </option>
+                      </template>
+                    </select>
+                  </div></div>
+                  <p style="font-size:0.62rem; color:#6e777b; margin-top:0.2rem;">
+                    Select which Distributed External Connection this IP Block should cover. The CIDR will be pre-filled from the selected connection's subnet.
+                  </p>
+                </div>
+              </template>
+
               <div class="clr-form-control" style="margin-bottom:0.75rem;">
                 <label class="clr-control-label" style="font-size:0.68rem;">CIDR</label>
                 <div class="clr-control-container">
@@ -1837,6 +1869,7 @@
                   <span x-show="fixModal.type === 's6d'">
                     Pre-filled from the Distributed External Connection
                     <strong x-text="fixModal.form.dvlan_name || '…'"></strong>
+                    <span x-show="fixModal.form.dvlan_vlan" x-text="'(VLAN ' + fixModal.form.dvlan_vlan + ')'"></span>
                     used by the Transit Gateway
                     <strong x-text="fixModal.form.tgw_name || 'Default Transit Gateway'"></strong>.
                   </span>
@@ -1854,7 +1887,7 @@
                          placeholder="e.g. 10.1.7.128-10.1.7.130, 10.1.7.254"
                          class="clr-input">
                 </div></div>
-                <p style="font-size:0.62rem; color:#6e777b; margin-top:0.2rem;">Enter range(s) to exclude (e.g. gateway). Stored as a description on the IP block.</p>
+                <p style="font-size:0.62rem; color:#6e777b; margin-top:0.2rem;">Enter range(s) to exclude (e.g. gateway VRRP or physical servers on that VLAN).</p>
               </div>
             </div>
           </template>
@@ -2001,7 +2034,7 @@
                     <div class="clr-select-wrapper">
                       <select x-model="fixModal.form.cluster_path" class="clr-select">
                         <template x-for="c in fixModal.options.edge_clusters" :key="c.id">
-                          <option :value="c.path" x-text="(c.name || c.id) + '  (' + c.path + ')'"></option>
+                          <option :value="c.path" x-text="(c.name || c.id) + (c.t0_name ? ' (' + c.t0_name + ')' : '')"></option>
                         </template>
                       </select>
                     </div>
@@ -2101,6 +2134,165 @@
   </div>
 
 
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       MTU Check Modal
+       ═══════════════════════════════════════════════════════════════════ -->
+  <div x-show="mtuModal.show" x-cloak
+       x-transition:enter="transition ease-out duration-200"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-150"
+       x-transition:leave-start="opacity-100"
+       x-transition:leave-end="opacity-0"
+       class="modal" aria-hidden="false">
+    <div class="modal-dialog" role="dialog" aria-modal="true"
+         style="max-width:700px; width:100%; display:flex; flex-direction:column; max-height:92vh;">
+      <div class="modal-content" style="display:flex; flex-direction:column; max-height:92vh;">
+
+        <div class="modal-header">
+          <button @click="mtuModal.show = false" aria-label="Close" class="close">
+            <i class="fas fa-times"></i>
+          </button>
+          <h3 class="modal-title" style="font-size:1rem;">
+            <i class="fas fa-network-wired" style="color:#0072a3; margin-right:0.4rem;"></i>
+            Check MTU — NSX Overlay Tunnels
+          </h3>
+        </div>
+
+        <div class="modal-body" style="flex:1; overflow-y:auto;">
+
+          <!-- Input form (before running) -->
+          <template x-if="!mtuModal.done && !mtuModal.loading">
+            <div>
+              <div style="background:#f0f7ff; border:1px solid #b3d4f5; border-radius:3px;
+                          padding:0.6rem 0.85rem; margin-bottom:1rem; font-size:0.82rem; color:#1a5276;">
+                <i class="fas fa-info-circle" style="margin-right:0.4rem;"></i>
+                This tool will:<br>
+                · Pick an ESX in the vCenter Cluster<br>
+                · <strong>Enable SSH temporarily</strong> on it if not already enabled<br>
+                · Run a large ping to test all its TEP tunnels<br>
+                · <strong>Disable SSH again automatically</strong> (if SSH was already enabled, it will be left as-is)
+              </div>
+              <div class="clr-form-control" style="margin-bottom:0.75rem;">
+                <label class="clr-control-label" style="font-size:0.68rem;">ESX Root Password</label>
+                <div class="clr-control-container"><div class="clr-input-wrapper">
+                  <input type="password" x-model="mtuModal.esx_pass"
+                         placeholder="root password for ESX hosts"
+                         class="clr-input"
+                         @keydown.enter="mtuModal.esx_pass && runMtuCheck()">
+                </div></div>
+              </div>
+              <div class="clr-form-control">
+                <label class="clr-control-label" style="font-size:0.68rem;">MTU Test Size (bytes)</label>
+                <div class="clr-control-container"><div class="clr-input-wrapper">
+                  <input type="number" x-model.number="mtuModal.mtu_size"
+                         class="clr-input" style="width:8rem;">
+                </div></div>
+                <p style="font-size:0.62rem; color:#6e777b; margin-top:0.2rem;">
+                  Use 1600 bytes. Requires physical fabric MTU ≥ 1700 (overhead: vmkping adds ~50 bytes).
+                </p>
+              </div>
+            </div>
+          </template>
+
+          <!-- Loading spinner -->
+          <template x-if="mtuModal.loading">
+            <div style="text-align:center; padding:2.5rem; color:#6e777b;">
+              <span style="display:inline-block; width:2.5rem; height:2.5rem;
+                    border:3px solid #dfe3e6; border-top-color:#0072a3; border-radius:50%;
+                    animation:clr-spin 0.8s linear infinite;"></span>
+              <p style="margin-top:0.75rem; font-size:0.85rem;">Running vmkping tests… (may take ~30s)</p>
+            </div>
+          </template>
+
+          <!-- Results -->
+          <template x-if="mtuModal.done">
+            <div>
+              <!-- Summary banner -->
+              <div :style="{
+                  background: (mtuModal.error || mtuModal.tests.some(t => !t.success)) ? '#fdf0f0' : '#f3fbf0',
+                  border: '1px solid ' + ((mtuModal.error || mtuModal.tests.some(t => !t.success)) ? '#f5c2c2' : '#c6e8ae'),
+                  borderRadius: '3px', padding: '0.6rem 0.85rem', marginBottom: '0.75rem',
+                  fontSize: '0.85rem', fontWeight: '600'
+                }">
+                <template x-if="mtuModal.error">
+                  <span style="color:#c00;">
+                    <i class="fas fa-times-circle" style="margin-right:0.3rem;"></i>
+                    <span x-text="mtuModal.error"></span>
+                  </span>
+                </template>
+                <template x-if="!mtuModal.error">
+                  <span :style="{color: mtuModal.tests.some(t=>!t.success) ? '#c00' : '#1a7a1a'}">
+                    <i :class="mtuModal.tests.some(t=>!t.success) ? 'fas fa-times-circle' : 'fas fa-check-circle'"
+                       style="margin-right:0.3rem;"></i>
+                    <span x-text="mtuModal.summary"></span>
+                  </span>
+                </template>
+              </div>
+
+              <!-- Results table -->
+              <template x-if="mtuModal.tests.length > 0">
+                <div style="overflow-x:auto;">
+                  <table style="width:100%; border-collapse:collapse; font-size:0.74rem;">
+                    <thead>
+                      <tr style="background:#f3f6fa; border-bottom:2px solid #dfe3e6;">
+                        <th style="padding:0.35rem 0.5rem; text-align:left;">From Host</th>
+                        <th style="padding:0.35rem 0.5rem; text-align:left;">VMK</th>
+                        <th style="padding:0.35rem 0.5rem; text-align:left;">Src IP</th>
+                        <th style="padding:0.35rem 0.5rem; text-align:left;">To Host</th>
+                        <th style="padding:0.35rem 0.5rem; text-align:left;">Dst IP</th>
+                        <th style="padding:0.35rem 0.5rem; text-align:center;">Result</th>
+                        <th style="padding:0.35rem 0.5rem; text-align:left;">Latency</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <template x-for="(t, i) in mtuModal.tests" :key="i">
+                        <tr :style="{background: t.success ? 'transparent' : '#fff5f5',
+                                     borderBottom: '1px solid #dfe3e6'}">
+                          <td style="padding:0.3rem 0.5rem;" x-text="t.from_host"></td>
+                          <td style="padding:0.3rem 0.5rem; font-family:monospace;" x-text="t.from_vmk"></td>
+                          <td style="padding:0.3rem 0.5rem; font-family:monospace; color:#6e777b;" x-text="t.from_ip"></td>
+                          <td style="padding:0.3rem 0.5rem;" x-text="t.to_host"></td>
+                          <td style="padding:0.3rem 0.5rem; font-family:monospace; color:#6e777b;" x-text="t.to_ip"></td>
+                          <td style="padding:0.3rem 0.5rem; text-align:center;">
+                            <span :style="{color: t.success ? '#1a7a1a' : '#c00', fontWeight:'700', fontSize:'0.75rem'}"
+                                  x-text="t.success ? '✓ PASS' : '✗ FAIL'"></span>
+                          </td>
+                          <td style="padding:0.3rem 0.5rem; font-family:monospace; color:#6e777b;"
+                              x-text="t.latency || '—'"></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
+              </template>
+            </div>
+          </template>
+
+        </div><!-- /modal-body -->
+
+        <div class="modal-footer" style="flex-shrink:0; gap:0.5rem;">
+          <button @click="mtuModal.show = false" class="btn btn-outline btn-sm">Close</button>
+          <template x-if="!mtuModal.loading && !mtuModal.done">
+            <button @click="runMtuCheck()"
+                    :disabled="!mtuModal.esx_pass"
+                    class="btn btn-primary btn-sm">
+              <i class="fas fa-play" style="margin-right:0.3rem;"></i>Run Test
+            </button>
+          </template>
+          <template x-if="mtuModal.done">
+            <button @click="mtuModal.done = false; mtuModal.tests = []; mtuModal.error = null; mtuModal.summary = ''"
+                    class="btn btn-outline btn-sm">
+              <i class="fas fa-redo" style="margin-right:0.3rem;"></i>Run Again
+            </button>
+          </template>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+
   <!-- ═══════════════════════════════════════════════════════════
        Alpine.js application logic (identical to reference app)
        ═══════════════════════════════════════════════════════════ -->
@@ -2124,6 +2316,13 @@
       showReqBtn:     false,
       showModeInfo:   true,
       modes: { distributed: [], centralized: [], vds_flb: [] },
+
+      // ── MTU Check ──────────────────────────────────────────────────────────
+      mtuModal: {
+        show: false, loading: false, done: false,
+        esx_pass: '', mtu_size: 1600,
+        tests: [], error: null, summary: ''
+      },
 
       // ── Install Wizard ─────────────────────────────────────────────────
       showInstallWizard: false,
@@ -2457,7 +2656,8 @@
           name: '', vlan_id: '', gateway_cidr: '',
           t0_path: '', connection_path: '', cidr: '',
           ext_ip_block_path: '', cluster_path: '', private_ip_block_path: '',
-          dvlan_name: '', tgw_name: '', excluded_ranges: ''
+          dvlan_name: '', dvlan_vlan: '', dvlan_sel_path: '', dvlan_list: [],
+          tgw_name: '', excluded_ranges: ''
         }
       },
 
@@ -2519,6 +2719,21 @@
         }
       },
 
+      _applyDvlanSelection(dvlan) {
+        if (!dvlan) return;
+        const gws = dvlan.gateway_addresses;
+        if (gws && gws[0]) this.fixModal.form.cidr = this.toCidr(gws[0]);
+        this.fixModal.form.dvlan_name = dvlan.display_name || dvlan.id || '';
+        this.fixModal.form.dvlan_vlan = dvlan.vlan_id || '';
+      },
+      s6dDvlanChanged() {
+        const sel  = this.fixModal.form.dvlan_sel_path;
+        const dvlan = (this.fixModal.form.dvlan_list || []).find(
+          c => (c.path || c.id || '') === sel
+        );
+        this._applyDvlanSelection(dvlan);
+      },
+
       toCidr(gatewayAddr) {
         try {
           const [ip, prefix] = gatewayAddr.split('/');
@@ -2541,7 +2756,8 @@
             name: '', vlan_id: '', gateway_cidr: '',
             t0_path: '', connection_path: '', cidr: '',
             ext_ip_block_path: '', cluster_path: '', private_ip_block_path: '',
-            dvlan_name: '', tgw_name: '', excluded_ranges: '',
+            dvlan_name: '', dvlan_vlan: '', dvlan_sel_path: '', dvlan_list: [],
+            tgw_name: '', excluded_ranges: '',
             s5_case: 1, new_tgw_name: 'dist-tgw1',
             project_id: 'default', tgw_path: '', vpc_profile_name: 'Default VPC Connectivity Profile'
           }
@@ -2615,17 +2831,18 @@
               if (ecs.length > 0) this.fixModal.form.edge_cluster_path = ecs[0].path;
             }
             if (step === '6' && mode === 'distributed') {
-              let dvlanUsed = d.dvlan_connections && d.dvlan_connections[0];
+              const dvlans = d.dvlan_connections || [];
+              let dvlanUsed = dvlans[0];
               if (d.tgw_attachments && d.tgw_attachments.length > 0) {
                 const tgwConnPath = d.tgw_attachments[0].connection_path;
-                const matched = (d.dvlan_connections || []).find(c => c.path === tgwConnPath);
+                const matched = dvlans.find(c => c.path === tgwConnPath);
                 if (matched) dvlanUsed = matched;
               }
-              const gws = dvlanUsed && dvlanUsed.gateway_addresses;
-              if (gws && gws[0]) this.fixModal.form.cidr = this.toCidr(gws[0]);
-              this.fixModal.form.dvlan_name = dvlanUsed ? (dvlanUsed.display_name || dvlanUsed.id || '') : '';
-              this.fixModal.form.tgw_name   = (d.tgw && (d.tgw.name || d.tgw.id)) || 'Default Transit Gateway';
+              this.fixModal.form.dvlan_list    = dvlans;
+              this.fixModal.form.dvlan_sel_path = dvlanUsed ? (dvlanUsed.path || dvlanUsed.id || '') : '';
+              this.fixModal.form.tgw_name      = (d.tgw && (d.tgw.name || d.tgw.id)) || 'Default Transit Gateway';
               this.fixModal.form.excluded_ranges = '';
+              this._applyDvlanSelection(dvlanUsed);
             }
             if (step === '7') {
               const extBlocks = mode === 'centralized'
@@ -2762,6 +2979,31 @@
         this.fixModal.form.vpc_profile_name = isDefaultTgw
           ? 'Default VPC Connectivity Profile'
           : 'vpc-dist-prof1';
+      },
+
+      async runMtuCheck() {
+        const m = this.mtuModal;
+        m.loading = true; m.done = false; m.tests = []; m.error = null; m.summary = '';
+        try {
+          const r = await fetch('/api/check-mtu', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              ...this.form,
+              esx_pass: m.esx_pass,
+              mtu_size: m.mtu_size,
+            })
+          });
+          const d = await r.json();
+          m.tests   = d.tests   || [];
+          m.error   = d.error   || null;
+          m.summary = d.summary || '';
+        } catch(e) {
+          m.error = String(e);
+        } finally {
+          m.loading = false;
+          m.done    = true;
+        }
       },
 
       async s7dProjectChanged() {
