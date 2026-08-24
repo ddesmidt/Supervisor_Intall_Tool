@@ -27,23 +27,18 @@ It supports all three vSphere Supervisor deployment modes:
 
 The tool displays three side-by-side columns — one per deployment mode — each showing a live readiness check with pass/warn/fail status per step:
 
-```
-┌─────────────────────────┬─────────────────────────┬─────────────────────────┐
-│  NSX-VPC Distributed ⭐  │   NSX-VPC Centralized   │        VDS / FLB        │
-│  Pros / Cons / Reqs     │  Pros / Cons / Reqs     │  Pros / Cons / Reqs     │
-├─────────────────────────┼─────────────────────────┼─────────────────────────┤
-│ ✅ vCenter Auth          │ ✅ vCenter Auth          │ ✅ vCenter Auth          │
-│ ✅ Supervisor Capability │ ✅ Supervisor Capability │ ✅ Supervisor Capability │
-│ ✅ NSX Host Preparation  │ ✅ NSX Host Preparation  │ — (not required)        │
-│ ✅ VNA Cluster           │ ⚠️  Edge Cluster [Fix]   │ — (not required)        │
-│ ✅ Distributed Ext Conn  │ ❌ Centralized Ext Conn  │ — (not required)        │
-│ ✅ Distributed TGW       │ ❌ Centralized TGW       │ — (not required)        │
-│ ✅ External IP Block     │ ❌ External IP Block      │ — (not required)        │
-│ ✅ VPC Profile           │ ❌ VPC Profile            │ — (not required)        │
-├─────────────────────────┼─────────────────────────┼─────────────────────────┤
-│  [ Deploy Supervisor ]  │  [ Deploy — disabled ]  │  [ Deploy — n/a ]       │
-└─────────────────────────┴─────────────────────────┴─────────────────────────┘
-```
+| NSX-VPC Distributed ⭐ | NSX-VPC Centralized | VDS / FLB |
+|---|---|---|
+| *Pros / Cons / Reqs* | *Pros / Cons / Reqs* | *Pros / Cons / Reqs* |
+| ✅ vCenter Auth | ✅ vCenter Auth | ✅ vCenter Auth |
+| ✅ Supervisor Capability | ✅ Supervisor Capability | ✅ Supervisor Capability |
+| ✅ NSX Host Preparation | ✅ NSX Host Preparation | — (not required) |
+| ✅ VNA Cluster | ⚠️ Edge Cluster \[Fix\] | — (not required) |
+| ✅ Distributed Ext Conn | ❌ Centralized Ext Conn | — (not required) |
+| ✅ Distributed TGW | ❌ Centralized TGW | — (not required) |
+| ✅ External IP Block | ❌ External IP Block | — (not required) |
+| ✅ VPC Profile | ❌ VPC Profile | — (not required) |
+| **\[ Deploy Supervisor \]** | **\[ Deploy — disabled \]** | **\[ Deploy — n/a \]** |
 
 ---
 
