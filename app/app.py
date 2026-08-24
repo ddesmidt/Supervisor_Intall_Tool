@@ -314,6 +314,16 @@ def check_requirements():
 
         try:
             d["vc_clusters"] = vc_get(vc_url, d["token"], "/api/vcenter/cluster") or []
+            # REST API ha_enabled/drs_enabled can be stale — overlay with accurate SOAP values
+            _morefs = [c.get("cluster") for c in d["vc_clusters"] if c.get("cluster")]
+            _soap_ha_drs = _soap_get_cluster_ha_drs(vc_url, username, password, _morefs)
+            for _c in d["vc_clusters"]:
+                _m = _c.get("cluster")
+                if _m and _m in _soap_ha_drs:
+                    _s = _soap_ha_drs[_m]
+                    if _s.get("ha_enabled")  is not None: _c["ha_enabled"]   = _s["ha_enabled"]
+                    if _s.get("drs_enabled") is not None: _c["drs_enabled"]  = _s["drs_enabled"]
+                    _c["drs_behavior"] = _s.get("drs_behavior")
         except Exception as e:
             d["vc_clusters"] = []; d["clusters_error"] = str(e)
 
@@ -500,30 +510,69 @@ def check_requirements():
             add("1", "Supervisor Capability", "ok" if supported else "error", msg,
                 f"namespaces_supported={supported}\nnamespaces_licensed={licensed}")
 
-        # ── Steps 2-7: NSX checks ────────────────────────────────────────────
+        # ── Step 2: HA/DRS (all modes) ───────────────────────────────────────
+        if "clusters_error" in d:
+            add("2", "vSphere HA / DRS", "warning", f"Could not check: {d['clusters_error']}")
+        else:
+            vc_clusters = d.get("vc_clusters", [])
+            cluster_issues, cluster_ok, clusters_to_fix = [], [], []
+            cluster_details = []
+            for c in vc_clusters:
+                name  = c.get("name", c.get("cluster", "?"))
+                moref = c.get("cluster", "")
+                bad   = []
+                if not c.get("ha_enabled"):
+                    bad.append("HA disabled")
+                if not c.get("drs_enabled"):
+                    bad.append("DRS disabled")
+                elif c.get("drs_behavior") and c["drs_behavior"] != "fullyAutomated":
+                    beh = c["drs_behavior"]
+                    bad.append(f"DRS not Fully Automated (mode: {beh})")
+                if bad:
+                    cluster_issues.append(f"{name}: {', '.join(bad)}")
+                    cluster_details.append(f"  · {name}: {', '.join(bad)}")
+                    clusters_to_fix.append({"moref": moref, "name": name, "issues": bad})
+                else:
+                    beh = c.get("drs_behavior") or "fullyAutomated"
+                    cluster_ok.append(name)
+                    cluster_details.append(f"  · {name}: HA ✓  DRS ✓ ({beh})")
+            if cluster_issues:
+                add("2", "vSphere HA / DRS", "error",
+                    f"{len(cluster_issues)} cluster(s) missing HA or DRS",
+                    "\n".join(cluster_details)
+                    + "\n\nBoth HA and DRS (Fully Automated) are required for Supervisor.",
+                    can_fix=True, fix_clusters=clusters_to_fix)
+            elif vc_clusters:
+                add("2", "vSphere HA / DRS", "ok",
+                    f"All {len(vc_clusters)} cluster(s) have HA and DRS enabled",
+                    "\n".join(cluster_details))
+            else:
+                add("2", "vSphere HA / DRS", "warning", "No clusters found via vCenter API.")
+
+        # ── Steps 3-8: NSX checks ────────────────────────────────────────────
         nsx_na = "Not required for this deployment mode."
 
         if mode == "vds_flb":
-            add("2", "NSX Host Preparation", "info", "Not required for VDS/FLB mode", nsx_na)
-            add("3", "NSX Networking",        "info", "Not required for VDS/FLB mode", nsx_na)
-            add("4", "External Connection",   "info", "Not required for VDS/FLB mode", nsx_na)
-            add("5", "TGW Attachment",         "info", "Not required for VDS/FLB mode", nsx_na)
-            add("6", "External IP Block",     "info", "Not required for VDS/FLB mode", nsx_na)
-            add("7", "VPC Profile",           "info", "Not required for VDS/FLB mode", nsx_na)
+            add("3", "NSX Host Preparation", "info", "Not required for VDS/FLB mode", nsx_na)
+            add("4", "NSX Networking",        "info", "Not required for VDS/FLB mode", nsx_na)
+            add("5-1", "External Connection",   "info", "Not required for VDS/FLB mode", nsx_na)
+            add("5-2", "TGW Attachment",         "info", "Not required for VDS/FLB mode", nsx_na)
+            add("5-3", "External IP Block",     "info", "Not required for VDS/FLB mode", nsx_na)
+            add("5-4", "VPC Profile",           "info", "Not required for VDS/FLB mode", nsx_na)
         elif not nsx_url:
             ext_conn_name = ("Distributed External Connection" if mode == "distributed"
                              else "Centralized External Connection" if mode == "centralized"
                              else "External Connection")
             for sn, nm in [
-                ("2", "NSX Host Preparation"), ("3", "NSX Networking"),
-                ("4", ext_conn_name),           ("5", "TGW Attachment"),
-                ("6", "External IP Block"),    ("7", "VPC Profile"),
+                ("3", "NSX Host Preparation"), ("4", "NSX Networking"),
+                ("5-1", ext_conn_name),           ("5-2", "TGW Attachment"),
+                ("5-3", "External IP Block"),    ("5-4", "VPC Profile"),
             ]:
                 add(sn, nm, "warning", "NSX URL not provided — enter it in the NSX section above.")
         else:
             # Step 2: TEPs (same for both NSX modes)
             if "tep_error" in d:
-                add("2", "NSX Host Preparation", "warning", f"Could not check: {d['tep_error']}")
+                add("3", "NSX Host Preparation", "warning", f"Could not check: {d['tep_error']}")
             elif d.get("tnc") or d.get("htn"):
                 tncs            = d.get("tnc", [])
                 htns            = d.get("htn", [])
@@ -574,17 +623,17 @@ def check_requirements():
                                    f"{', '.join(cluster_names)} — "
                                    f"{fail_count} host(s) with issues")
 
-                add("2", "NSX Host Preparation", step_status, subtitle,
+                add("3", "NSX Host Preparation", step_status, subtitle,
                     "\n".join(detail_lines))
             else:
-                add("2", "NSX Host Preparation", "error",
+                add("3", "NSX Host Preparation", "error",
                     "No ESXi hosts prepared with NSX.",
                     "Without NSX host prep, Supervisor cannot use NSX-VPC networking.")
 
             # Step 3: networking topology (mode-specific)
             if mode == "distributed":
                 if "topo_error" in d:
-                    add("3", "VNA Cluster", "warning", f"Could not check: {d['topo_error']}")
+                    add("4", "VNA Cluster", "warning", f"Could not check: {d['topo_error']}")
                 elif d.get("vna"):
                     vna_states = d.get("vna_states") or {}
                     detail_lines = []
@@ -607,19 +656,19 @@ def check_requirements():
                     detail = "\n".join(detail_lines)
                     names_str = ", ".join(names)
                     if all_ok:
-                        add("3", "VNA Cluster", "ok",
+                        add("4", "VNA Cluster", "ok",
                             f"VNA Cluster found: {names_str}", detail)
                     elif any_failed:
-                        add("3", "VNA Cluster", "error",
+                        add("4", "VNA Cluster", "error",
                             f"VNA Cluster deployment failed", detail, can_fix=True)
                     elif any_deploying:
-                        add("3", "VNA Cluster", "warning",
+                        add("4", "VNA Cluster", "warning",
                             f"VNA Cluster deploying: {names_str}", detail)
                     else:
-                        add("3", "VNA Cluster", "warning",
+                        add("4", "VNA Cluster", "warning",
                             f"VNA Cluster status unknown: {names_str}", detail)
                 else:
-                    add("3", "VNA Cluster", "error",
+                    add("4", "VNA Cluster", "error",
                         "No VNA Cluster found.",
                         "A VNA Cluster is required for Distributed NSX-VPC mode.\n"
                         "This tool will guide you through the installation.\n\n"
@@ -628,21 +677,21 @@ def check_requirements():
                         can_fix=True)
             else:  # centralized
                 if "topo_error" in d:
-                    add("3", "Edge Cluster + Tier-0", "warning", f"Could not check: {d['topo_error']}")
+                    add("4", "Edge Cluster + Tier-0", "warning", f"Could not check: {d['topo_error']}")
                 elif d.get("ec") and d.get("t0"):
                     ec_lines = "\n".join(f"  - {e.get('display_name','?')}" for e in d["ec"])
                     t0_lines = "\n".join(f"  - {t.get('display_name','?')}" for t in d["t0"])
                     detail   = f"· Edge cluster(s):\n{ec_lines}\n· Tier-0(s):\n{t0_lines}"
-                    add("3", "Edge Cluster + Tier-0", "ok",
+                    add("4", "Edge Cluster + Tier-0", "ok",
                         "Edge Cluster + Tier-0 found", detail)
                 elif d.get("ec"):
-                    add("3", "Edge Cluster + Tier-0", "error",
+                    add("4", "Edge Cluster + Tier-0", "error",
                         "Edge Cluster found but no Tier-0.",
                         f"Edge clusters: {[e.get('display_name','?') for e in d['ec']]}\n"
                         "A Tier-0 with BGP is required for Centralized NSX-VPC mode.",
                         can_fix=True)
                 else:
-                    add("3", "Edge Cluster + Tier-0", "error",
+                    add("4", "Edge Cluster + Tier-0", "error",
                         "No Edge Cluster found.",
                         "An Edge Cluster with Tier-0 + BGP is required for Centralized NSX-VPC.\n"
                         "This tool does not automate Edge Cluster + Tier-0 deployment.\n"
@@ -654,7 +703,7 @@ def check_requirements():
             # Step 4: external connection (mode-specific)
             if mode == "distributed":
                 if "extconn_error" in d:
-                    add("4", "Distributed External Connection", "warning", f"Could not check: {d['extconn_error']}")
+                    add("5-1", "Distributed External Connection", "warning", f"Could not check: {d['extconn_error']}")
                 elif d.get("dvlan"):
                     names = [dc.get("display_name", dc.get("id", "?")) for dc in d["dvlan"]]
                     detail_lines = []
@@ -663,11 +712,11 @@ def check_requirements():
                         vlan = dc.get("vlan_id", "?")
                         gws  = ", ".join(dc.get("gateway_addresses") or []) or "?"
                         detail_lines.append(f"· {name}\n  VLAN ID: {vlan}\n  Gateway: {gws}")
-                    add("4", "Distributed External Connection", "ok",
+                    add("5-1", "Distributed External Connection", "ok",
                         f"{len(d['dvlan'])} Distributed External Connection(s): {', '.join(names)}",
                         "\n".join(detail_lines))
                 else:
-                    add("4", "Distributed External Connection", "error",
+                    add("5-1", "Distributed External Connection", "error",
                         "No Distributed External Connection found.",
                         "The Distributed External Connection is the connection to the physical fabric.\n"
                         "In the Distributed option, that's a VLAN / physical gateway.\n"
@@ -676,7 +725,7 @@ def check_requirements():
                         can_fix=True)
             else:  # centralized
                 if "extconn_error" in d:
-                    add("4", "Centralized External Connection", "warning", f"Could not check: {d['extconn_error']}")
+                    add("5-1", "Centralized External Connection", "warning", f"Could not check: {d['extconn_error']}")
                 elif d.get("gw_conn"):
                     detail_lines = []
                     for gc in d["gw_conn"]:
@@ -684,11 +733,11 @@ def check_requirements():
                         t0    = (gc.get("tier0_path") or "?").rstrip("/").split("/")[-1]
                         detail_lines.append(f"· {name}\n  Tier-0: {t0}")
                     names = [gc.get("display_name", gc.get("id","?")) for gc in d["gw_conn"]]
-                    add("4", "Centralized External Connection", "ok",
+                    add("5-1", "Centralized External Connection", "ok",
                         f"Gateway Connection: {', '.join(names)}",
                         "\n".join(detail_lines))
                 else:
-                    add("4", "Centralized External Connection", "error",
+                    add("5-1", "Centralized External Connection", "error",
                         "No Centralized External Connection found.",
                         "The Centralized External Connection is the connection to the physical fabric.\n"
                         "In the Centralized option, that's an NSX Tier-0.\n"
@@ -697,7 +746,7 @@ def check_requirements():
 
             # Step 5: TGW attachment — mode-specific connection type check
             if "tgw_error" in d:
-                add("5", "Distributed Transit Gateway" if mode == "distributed" else "TGW Attachment",
+                add("5-2", "Distributed Transit Gateway" if mode == "distributed" else "TGW Attachment",
                     "warning", f"Could not check: {d['tgw_error']}")
             else:
                 all_att_global = d.get("tgw_all_att", d.get("tgw_att", []))
@@ -721,13 +770,13 @@ def check_requirements():
                             for cp in cps:
                                 conn_name = cp.rstrip("/").split("/")[-1]
                                 lines.append(f"  Attached to: {conn_name}")
-                        add("5", "Distributed Transit Gateway", "ok",
+                        add("5-2", "Distributed Transit Gateway", "ok",
                             f"{len(dist_att)} Distributed Transit Gateway attachment(s)",
                             "\n".join(lines))
                     elif d.get("tgw"):
                         if centralized_att:
                             # Case 2: Default TGW is already Centralized → must create a new TGW
-                            add("5", "Distributed Transit Gateway", "error",
+                            add("5-2", "Distributed Transit Gateway", "error",
                                 "No Distributed Transit Gateway",
                                 "The Default Transit Gateway is already configured as Centralized.\n"
                                 "A new Distributed Transit Gateway must be created and attached\n"
@@ -736,12 +785,12 @@ def check_requirements():
                                 can_fix=True)
                         else:
                             # Case 1: Default TGW has no connection → attach it
-                            add("5", "Distributed Transit Gateway", "error",
+                            add("5-2", "Distributed Transit Gateway", "error",
                                 "No existing Distributed Transit Gateway.",
                                 "This tool will guide you through attaching it to a Distributed External Connection.",
                                 can_fix=True)
                     else:
-                        add("5", "Distributed Transit Gateway", "error",
+                        add("5-2", "Distributed Transit Gateway", "error",
                             "Default Transit Gateway not found.",
                             "The Transit Gateway is required for NSX-VPC networking.\n"
                             "This tool will guide you through the configuration.",
@@ -784,15 +833,15 @@ def check_requirements():
                                     lines.append(f"  Edge Cluster: {ec_name}")
                             except Exception:
                                 pass
-                        add("5", "Centralized Transit Gateway", "ok",
+                        add("5-2", "Centralized Transit Gateway", "ok",
                             subtitle, "\n".join(lines))
                     elif d.get("tgw"):
-                        add("5", "Centralized Transit Gateway", "error",
+                        add("5-2", "Centralized Transit Gateway", "error",
                             "No existing Centralized Transit Gateway.",
                             "This tool will guide you through attaching it to a Centralized External Connection.",
                             can_fix=True)
                     else:
-                        add("5", "Centralized Transit Gateway", "error",
+                        add("5-2", "Centralized Transit Gateway", "error",
                             "Default Transit Gateway not found.",
                             "The Transit Gateway is required for NSX-VPC networking.\n"
                             "This tool will guide you through the configuration.",
@@ -800,7 +849,7 @@ def check_requirements():
 
             # Step 6: external IP blocks — mode-specific validity check
             if "blocks_error" in d:
-                add("6", "External IP Block", "warning", f"Could not check: {d['blocks_error']}")
+                add("5-3", "External IP Block", "warning", f"Could not check: {d['blocks_error']}")
             else:
                 all_ext = d.get("ext_blocks", [])
 
@@ -821,13 +870,10 @@ def check_requirements():
                         return False
 
                 if mode == "distributed":
-                    # Distributed: the block must come FROM a DVLAN connection subnet
-                    # (its CIDR must overlap with at least one Distributed External Connection gateway subnet)
-                    if dvlan_nets:
-                        valid_blocks = [b for b in all_ext
-                                        if _overlaps_dvlan(b.get("cidr", ""))]
-                    else:
-                        valid_blocks = all_ext  # no DVLAN connections yet → show all
+                    # Distributed: the block MUST overlap a DVLAN connection's gateway subnet.
+                    # If there are no DVLAN connections there can be no valid block.
+                    valid_blocks = [b for b in all_ext
+                                    if dvlan_nets and _overlaps_dvlan(b.get("cidr", ""))]
                 else:
                     # Centralized: the block must NOT overlap with a DVLAN gateway subnet
                     valid_blocks = [b for b in all_ext
@@ -844,24 +890,30 @@ def check_requirements():
                         if desc:
                             line += f"\n  {desc}"
                         detail_lines.append(line)
-                    add("6", "External IP Block", "ok",
+                    add("5-3", "External IP Block", "ok",
                         f"{len(valid_blocks)} External IP block(s): {', '.join(block_info)}",
                         "\n".join(detail_lines))
                 else:
                     if mode == "distributed":
-                        # Mention any non-matching blocks that were rejected
-                        overlap_note = ""
-                        rejected = [b for b in all_ext if not _overlaps_dvlan(b.get("cidr", ""))]
-                        if rejected:
-                            names = [b.get("display_name", "?") for b in rejected]
-                            overlap_note = (f"\nNote: {len(rejected)} block(s) found ({', '.join(names)})"
-                                            " but their CIDR does not match any Distributed External Connection subnet.")
-                        ext_detail = (
-                            "An External IP Block is required for future Supervisor VIP and NAT allocation.\n"
-                            "In the Distributed option, the CIDR must match the subnet from Step 4 "
-                            "(Distributed External Connection)." + overlap_note + "\n"
-                            "This tool will guide you through the creation of an External IP Block."
-                        )
+                        if not dvlan_nets:
+                            ext_detail = (
+                                "No Distributed External Connection found (Step S5-1).\n"
+                                "An External IP Block for Distributed mode requires a Distributed External Connection first —\n"
+                                "its CIDR must match that connection's gateway subnet."
+                            )
+                        else:
+                            rejected = [b for b in all_ext if not _overlaps_dvlan(b.get("cidr", ""))]
+                            overlap_note = ""
+                            if rejected:
+                                names = [b.get("display_name", "?") for b in rejected]
+                                overlap_note = (f"\nNote: {len(rejected)} block(s) found ({', '.join(names)})"
+                                                " but their CIDR does not match any Distributed External Connection subnet.")
+                            ext_detail = (
+                                "An External IP Block is required for future Supervisor VIP and NAT allocation.\n"
+                                "In the Distributed option, the CIDR must match the subnet from Step S5-1 "
+                                "(Distributed External Connection)." + overlap_note + "\n"
+                                "This tool will guide you through the creation of an External IP Block."
+                            )
                     else:
                         overlap_note = ""
                         if all_ext:
@@ -874,7 +926,7 @@ def check_requirements():
                             "which the physical fabric will learn from the T0-BGP." + overlap_note + "\n"
                             "This tool will guide you through the creation of an External IP Block."
                         )
-                    add("6", "External IP Block", "error",
+                    add("5-3", "External IP Block", "error",
                         "No External IP Block found.",
                         ext_detail,
                         can_fix=True)
@@ -884,7 +936,7 @@ def check_requirements():
                        if mode == "distributed"
                        else "Centralized VPC Connectivity Profile")
             if "vcp_error" in d:
-                add("7", title_7, "warning", f"Could not check: {d['vcp_error']}")
+                add("5-4", title_7, "warning", f"Could not check: {d['vcp_error']}")
             else:
                 all_vcps      = d.get("all_vcps", [v for v in [d.get("vcp")] if v])
                 cluster_label = "VNA Cluster" if mode == "distributed" else "Edge Cluster"
@@ -973,7 +1025,7 @@ def check_requirements():
                          "valid_vpc_profiles": profs}
                         for (pid, pname, ppath), profs in _proj_map.items()
                     ]
-                    add("7", title_7, "ok", subtitle, "\n".join(lines),
+                    add("5-4", title_7, "ok", subtitle, "\n".join(lines),
                         valid_vcps_for_deploy=_deploy_projects)
                 else:
                     tgw_bullet = ("  · Transit Gateway: Distributed"
@@ -984,38 +1036,12 @@ def check_requirements():
                                  f"  · {cluster_label}",
                                  "  · N/S Services",
                                  "  · Outbound NAT"]
-                    add("7", title_7, "error",
+                    add("5-4", title_7, "error",
                         f"No valid {title_7} in any NSX Project",
                         "VPC Connectivity Profile requires the following settings:\n"
                         + "\n".join(req_lines)
                         + "\n\nThose are missing and this tool will guide you through this configuration.",
                         can_fix=True)
-
-        # ── Step 8: HA/DRS (all modes) ───────────────────────────────────────
-        if "clusters_error" in d:
-            add("8", "vSphere HA / DRS", "warning", f"Could not check: {d['clusters_error']}")
-        else:
-            vc_clusters = d.get("vc_clusters", [])
-            cluster_issues, cluster_ok = [], []
-            for c in vc_clusters:
-                name = c.get("name", c.get("cluster", "?"))
-                bad  = []
-                if c.get("ha_enabled")  is False: bad.append("HA disabled")
-                if c.get("drs_enabled") is False: bad.append("DRS disabled")
-                if bad: cluster_issues.append(f"{name}: {', '.join(bad)}")
-                else:   cluster_ok.append(name)
-            if cluster_issues:
-                add("8", "vSphere HA / DRS", "warning",
-                    f"{len(cluster_issues)} cluster(s) with issues",
-                    "Issues:\n" + "\n".join(f"  • {i}" for i in cluster_issues)
-                    + ("\n\nOK: " + ", ".join(cluster_ok) if cluster_ok else "")
-                    + "\n\nNote: Both HA and DRS must be enabled on the Supervisor target cluster.")
-            elif vc_clusters:
-                add("8", "vSphere HA / DRS", "ok",
-                    f"All {len(vc_clusters)} cluster(s) have HA and DRS enabled",
-                    "Clusters: " + ", ".join(cluster_ok))
-            else:
-                add("8", "vSphere HA / DRS", "warning", "No clusters found via vCenter API.")
 
         return checks
 
@@ -2297,6 +2323,49 @@ def fix_configure_vpc_profile():
 
 # ── vCenter SOAP helpers for SSH service management ──────────────────────────
 
+def _soap_get_cluster_ha_drs(vc_url, vc_user, vc_pass, cluster_morefs):
+    """
+    Fetch accurate HA and DRS settings for vSphere clusters via SOAP.
+    The REST API /api/vcenter/cluster returns stale ha_enabled / drs_enabled values;
+    SOAP ClusterComputeResource.configuration is the authoritative source.
+
+    Returns dict: {moref: {"ha_enabled": bool, "drs_enabled": bool, "drs_behavior": str}}
+    where drs_behavior is "fullyAutomated" | "partiallyAutomated" | "manual" | None.
+    """
+    import re as _re
+    if not cluster_morefs:
+        return {}
+    result = {}
+    try:
+        s, ep, hdr = _soap_session(vc_url, vc_user, vc_pass)
+        for moref in cluster_morefs:
+            r = s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><RetrieveProperties xmlns="urn:vim25">'
+                '<_this type="PropertyCollector">propertyCollector</_this>'
+                '<specSet>'
+                '<propSet><type>ClusterComputeResource</type><all>false</all>'
+                '<pathSet>configuration</pathSet>'
+                '</propSet>'
+                f'<objectSet><obj type="ClusterComputeResource">{moref}</obj></objectSet>'
+                '</specSet>'
+                '</RetrieveProperties></Body></Envelope>'))
+            if r.status_code != 200 or 'Fault' in r.text:
+                continue
+            t = r.text
+            m_ha  = _re.search(r'<dasConfig>.*?<enabled>(.*?)</enabled>', t, _re.S)
+            m_den = _re.search(r'<drsConfig>.*?<enabled>(.*?)</enabled>', t, _re.S)
+            m_dbh = _re.search(r'<drsConfig>.*?<defaultVmBehavior>(.*?)</defaultVmBehavior>', t, _re.S)
+            result[moref] = {
+                "ha_enabled":   m_ha.group(1).strip().lower()  == 'true' if m_ha  else None,
+                "drs_enabled":  m_den.group(1).strip().lower() == 'true' if m_den else None,
+                "drs_behavior": m_dbh.group(1).strip()                   if m_dbh else None,
+            }
+    except Exception:
+        pass
+    return result
+
+
 def _soap_session(vc_url, vc_user, vc_pass):
     """Open a vCenter SOAP session. Returns (requests.Session, endpoint, headers)."""
     ep  = f"{vc_url}/sdk"
@@ -2438,6 +2507,86 @@ def _collect_mtu_hosts(nsx_url, nsx_user, nsx_pass):
             "has_vmks": has_vmks,
         })
     return hosts
+
+
+@app.route("/api/fix-ha-drs", methods=["POST"])
+def fix_ha_drs():
+    """Enable HA and DRS (Fully Automated) on a vSphere cluster via SOAP."""
+    import re as _re, time as _time
+    body          = request.get_json(force=True)
+    vc_url        = normalize_url(body.get("vc_url", ""))
+    vc_user       = body.get("username", "")
+    vc_pass       = body.get("password", "")
+    cluster_moref = (body.get("cluster_moref") or "").strip()
+
+    result = {"success": False, "error": None}
+    if not cluster_moref:
+        result["error"] = "No cluster moref provided."
+        return jsonify(result)
+
+    try:
+        s, ep, hdr = _soap_session(vc_url, vc_user, vc_pass)
+
+        # ReconfigureComputeResource_Task — enable HA + DRS Fully Automated
+        r = s.post(ep, verify=False, timeout=30, headers=hdr, data=(
+            '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/" '
+            '          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+            '<Body><ReconfigureComputeResource_Task xmlns="urn:vim25">'
+            f'<_this type="ClusterComputeResource">{cluster_moref}</_this>'
+            '<spec xsi:type="ClusterConfigSpecEx">'
+            '<dasConfig><enabled>true</enabled></dasConfig>'
+            '<drsConfig>'
+            '<enabled>true</enabled>'
+            '<defaultVmBehavior>fullyAutomated</defaultVmBehavior>'
+            '</drsConfig>'
+            '</spec>'
+            '<modify>true</modify>'
+            '</ReconfigureComputeResource_Task></Body></Envelope>'))
+
+        if r.status_code != 200 or 'Fault' in r.text:
+            m = _re.search(r'<faultstring>(.*?)</faultstring>', r.text, _re.S)
+            result["error"] = (m.group(1).strip() if m else
+                               f"HTTP {r.status_code}: {r.text[:200]}")
+            return jsonify(result)
+
+        m = _re.search(r'type="Task"[^>]*>([^<]+)<', r.text)
+        if not m:
+            result["error"] = "Could not parse task ID from vCenter response."
+            return jsonify(result)
+        task_moref = m.group(1).strip()
+
+        # Poll task (up to 60 s)
+        for _ in range(30):
+            _time.sleep(2)
+            rp = s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><RetrieveProperties xmlns="urn:vim25">'
+                '<_this type="PropertyCollector">propertyCollector</_this>'
+                '<specSet>'
+                '<propSet><type>Task</type><all>false</all>'
+                '<pathSet>info.state</pathSet>'
+                '<pathSet>info.error</pathSet></propSet>'
+                f'<objectSet><obj type="Task">{task_moref}</obj></objectSet>'
+                '</specSet>'
+                '</RetrieveProperties></Body></Envelope>'))
+            m_st = _re.search(
+                r'<name>info\.state</name>\s*<val[^>]*>([^<]+)</val>', rp.text, _re.S)
+            state = m_st.group(1).strip() if m_st else "running"
+            if state == "success":
+                result["success"] = True
+                return jsonify(result)
+            if state == "error":
+                m_err = _re.search(
+                    r'<localizedMessage>(.*?)</localizedMessage>', rp.text, _re.S)
+                result["error"] = m_err.group(1).strip() if m_err else "Task failed."
+                return jsonify(result)
+
+        result["error"] = "Task timed out after 60 s."
+        return jsonify(result)
+
+    except Exception as e:
+        result["error"] = str(e)
+        return jsonify(result)
 
 
 @app.route("/api/mtu-hosts", methods=["POST"])
