@@ -65,7 +65,7 @@ The tool queries vCenter and NSX and displays a **3-column matrix**, one column 
 Each column shows:
 
 - A **Pros / Cons / Requirements** summary at the top
-- **8 requirement steps** (S1–S8), each with a status badge:
+- **9 requirement steps** (S1–S5-4), each with a status badge:
   - ✅ **Green** — requirement met
   - ⚠️ **Amber** — warning (not blocking, but worth noting)
   - ❌ **Red** — requirement not met
@@ -103,17 +103,18 @@ The following steps have automated Fix wizards:
 
 | Step | Mode | What the fix does |
 |---|---|---|
-| S3 — VNA Cluster | Distributed | Deploys a 2-node VNA cluster on the WLD vCenter cluster |
-| S4 — Distributed External Connection | Distributed | Creates a Distributed VLAN Connection in NSX |
-| S4 — Centralized External Connection | Centralized | Creates a Gateway Connection (Tier-0 + BGP required first) |
-| S5 — Distributed Transit Gateway | Distributed | Attaches the Default TGW to a DVLAN connection, or creates a new Distributed TGW |
-| S5 — Centralized Transit Gateway | Centralized | Attaches the Default TGW to a Gateway Connection, or creates a new Centralized TGW |
-| S6 — External IP Block | Distributed + Centralized | Creates an NSX External IP Block |
-| S7 — VPC Connectivity Profile | Distributed + Centralized | Creates or updates the VPC Connectivity Profile in the NSX Default Project |
+| S2 — vSphere HA / DRS | All | Enables HA and sets DRS to Fully Automated on the cluster via vCenter SOAP |
+| S4 — VNA Cluster | Distributed | Deploys a 2-node VNA cluster on the WLD vCenter cluster |
+| S5-1 — Distributed External Connection | Distributed | Creates a Distributed VLAN Connection in NSX |
+| S5-1 — Centralized External Connection | Centralized | Creates a Gateway Connection (Tier-0 + BGP required first) |
+| S5-2 — Distributed Transit Gateway | Distributed | Attaches the Default TGW to a DVLAN connection, or creates a new Distributed TGW |
+| S5-2 — Centralized Transit Gateway | Centralized | Attaches the Default TGW to a Gateway Connection, or creates a new Centralized TGW |
+| S5-3 — External IP Block | Distributed + Centralized | Creates an NSX External IP Block |
+| S5-4 — VPC Connectivity Profile | Distributed + Centralized | Creates or updates the VPC Connectivity Profile in the NSX Default Project |
 
-### VNA Cluster Deployment (S3 Distributed)
+### VNA Cluster Deployment (S4 Distributed)
 
-When you click **Fix** on S3 Distributed, a 3-step wizard opens:
+When you click **Fix** on S4 Distributed, a 3-step wizard opens:
 
 1. **Node IPs** — Select the port group, enter the two management IPs (one per VNA node). The vSphere cluster and datastore are auto-selected.
 2. **Network settings** — If the IPs are in the same subnet as the vCenter management network, no extra input is needed. Otherwise, enter the subnet prefix, gateway, and DNS.
@@ -121,7 +122,16 @@ When you click **Fix** on S3 Distributed, a 3-step wizard opens:
 
 After clicking Deploy, the wizard shows live progress (polled every 30 seconds). Deployment typically takes 15–20 minutes.
 
-### VPC Connectivity Profile (S7 Distributed)
+### Cascade Fix (S5-1 Distributed)
+
+The S5-1 Distributed External Connection fix wizard includes an optional **"Also auto-fix S5-2, S5-3, S5-4"** checkbox. When enabled, after creating the DVLAN connection the tool automatically:
+1. Attaches the Transit Gateway to the new connection (S5-2)
+2. Creates an External IP Block using the connection's subnet (S5-3)
+3. Configures the VPC Connectivity Profile (S5-4)
+
+Each sub-step is shown with its own progress row. Steps that cannot complete (e.g. S5-4 is skipped if no VNA Cluster exists yet) are marked as skipped with a warning message.
+
+### VPC Connectivity Profile (S5-4 Distributed)
 
 The S7 fix wizard auto-populates fields from data already discovered during the requirements check:
 
