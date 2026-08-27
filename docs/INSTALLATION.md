@@ -30,10 +30,8 @@ cd Supervisor_Intall_Tool
 
 ## Step 2 — Install Python Dependencies
 
-The app uses only packages available via `apt` (no PyPI access required):
-
 ```bash
-apt-get install -y python3-flask python3-requests
+apt-get install -y python3-flask python3-requests python3-paramiko
 ```
 
 Alternatively, if PyPI is accessible:
@@ -42,17 +40,48 @@ Alternatively, if PyPI is accessible:
 pip3 install -r app/requirements.txt
 ```
 
-**Dependencies:**
+**Python dependencies:**
 
 | Package | Version | Purpose |
 |---|---|---|
 | `flask` | ≥ 3.0 | Web framework |
 | `requests` | ≥ 2.31 | HTTP client for vCenter/NSX APIs |
 | `urllib3` | ≥ 2.0 | TLS handling (self-signed cert support) |
+| `paramiko` | ≥ 3.0 | SSH client used by the MTU Check feature |
 
 ---
 
-## Step 3 — Deploy the App
+## Step 3 — Install PowerShell Core + VMware PowerCLI
+
+The **Check VLAN** feature uses PowerCLI to create temporary VMkernel adapters on ESX hosts and run connectivity tests. This requires PowerShell Core (`pwsh`) and the VMware PowerCLI module.
+
+```bash
+# Install PowerShell Core via snap
+snap install powershell --classic
+
+# Verify
+pwsh --version
+```
+
+Then install the PowerCLI module inside PowerShell:
+
+```bash
+pwsh -Command "Install-Module -Name VMware.PowerCLI -Scope AllUsers -Force -AllowClobber"
+```
+
+This step takes a few minutes. Verify the install:
+
+```bash
+pwsh -Command "Get-Module -ListAvailable VMware.PowerCLI | Select Name, Version"
+```
+
+> **Note:** If the VM has no internet access, install PowerCLI offline by downloading the module on a connected machine and copying it to `/usr/local/share/powershell/Modules/`.
+
+> **Note:** The Check VLAN button is only shown when S5-1 through S5-4 are all green. If you do not use this feature, PowerShell and PowerCLI are not required.
+
+---
+
+## Step 4 — Deploy the App
 
 ```bash
 # Copy app files to the standard location
@@ -66,7 +95,7 @@ ls /opt/supervisor-check/
 
 ---
 
-## Step 4 — Configure and Start the systemd Service
+## Step 5 — Configure and Start the systemd Service
 
 ```bash
 # Install the service unit
@@ -92,7 +121,7 @@ The app listens on **port 80** and starts automatically on boot.
 
 ---
 
-## Step 5 — Verify
+## Step 6 — Verify
 
 Open a browser and navigate to:
 

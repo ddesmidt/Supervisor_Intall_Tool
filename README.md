@@ -63,7 +63,13 @@ git clone https://github.com/ddesmidt/Supervisor_Intall_Tool.git
 cd Supervisor_Intall_Tool
 
 # Install Python dependencies
-apt-get install -y python3-flask python3-requests
+apt-get install -y python3-flask python3-requests python3-paramiko
+
+# Install PowerShell Core (required for the Check VLAN feature)
+snap install powershell --classic
+
+# Install VMware PowerCLI (inside PowerShell)
+pwsh -Command "Install-Module -Name VMware.PowerCLI -Scope AllUsers -Force -AllowClobber"
 
 # Copy app to standard location
 cp -r app/ /opt/supervisor-check/
