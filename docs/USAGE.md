@@ -83,17 +83,31 @@ Steps the tool cannot automate (e.g. Edge Cluster + Tier-0 for Centralized mode)
 
 ### Check MTU Button
 
-S2 (NSX Host Preparation) also shows a **"Check MTU"** button in the NSX columns. NSX overlay networking requires MTU ≥ 1700 on the physical fabric — use this to verify before deploying.
+S3 (NSX Host Preparation) shows a **"Check MTU"** button in the NSX columns. NSX overlay networking requires MTU ≥ 1700 on the physical fabric — use this to verify before deploying.
 
 Clicking it opens a wizard that:
-1. Prompts for the **ESX root password**
-2. Picks one ESX host from the cluster
+1. Shows all available ESX hosts (with health indicator); user selects the source host
+2. Prompts for the **ESX root password**
 3. **Temporarily enables SSH** on that host via vCenter SOAP (if not already enabled)
 4. Runs large ICMP pings to each TEP tunnel peer to test the path
-5. Shows per-tunnel **pass / fail** results
+5. Shows per-tunnel **pass / fail** results; the button turns green or red
 6. **Restores SSH** to its original state automatically
 
 If any tunnel shows as failed, the physical switch ports or vDS uplinks MTU needs to be raised to at least 1700 bytes before proceeding.
+
+### Check VLAN Button
+
+Once **S5-1 through S5-4 are all green**, a **"Check VLAN"** button appears on S5-1 in the Distributed column. Use it to verify that the DVLAN VLAN ID is correctly configured end-to-end on every ESX host before deploying Supervisor.
+
+Clicking it opens a wizard that:
+1. Shows all ESX hosts; prompts for the root password (entering the first password copies it to all hosts)
+2. Creates a **temporary DVPortGroup** on the VDS with the connection's VLAN ID
+3. Adds a **temporary VMkernel NIC** to each host using an auto-picked IP from the connection subnet
+4. Pings the **VLAN gateway** from each VMkernel NIC
+5. Shows a per-host **pass / fail** result; the button turns green or red
+6. Removes all temporary VMkernel NICs and the temporary DVPortGroup automatically
+
+A failure indicates a physical switch VLAN tagging issue that must be resolved before proceeding.
 
 ---
 

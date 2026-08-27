@@ -175,6 +175,18 @@ This step differs between modes.
 
 **Cascade mode:** The S5-1 fix wizard offers an optional **"Also auto-fix S5-2, S5-3, S5-4"** checkbox. When enabled, after S5-1 succeeds the tool automatically runs S5-2 (TGW attachment), S5-3 (External IP Block), and S5-4 (VPC Profile) in sequence, showing per-step progress. Steps that cannot run due to missing data (e.g. no VNA Cluster yet) are skipped with a warning.
 
+**Check VLAN button:**
+Once S5-1 through S5-4 are all green, a **"Check VLAN"** button appears on S5-1 in the Distributed column. It verifies end-to-end VLAN reachability on every ESX host:
+
+1. Prompts for the root password of each ESX host (entering the first password auto-fills all others)
+2. Creates a temporary DVPortGroup on the VDS with the connection's VLAN ID
+3. Adds a temporary VMkernel NIC per ESX host using an auto-selected IP from the connection subnet (avoids gateway and any excluded ranges)
+4. Pings the VLAN gateway from each VMkernel NIC
+5. Reports a per-host pass/fail result
+6. Removes all temporary VMkernel NICs and destroys the temporary DVPortGroup
+
+The button turns green (all hosts pass) or red (any host fails). This confirms that physical switch VLAN tagging is correct before deploying Supervisor.
+
 ### S5-1 — Centralized: Centralized External Connection
 
 **What it checks:** Is there at least one **Gateway Connection** (Tier-0 backed) in NSX?
