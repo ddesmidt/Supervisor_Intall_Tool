@@ -2832,5 +2832,581 @@ def check_mtu():
     return jsonify(result)
 
 
+# ── Check VLAN helpers ──────────────────────────────────────────────────────
+
+def _pick_temp_ips(cidr, gateway_cidr, excluded_str, count):
+    """Pick up to `count` host IPs from cidr, excluding gateway and excluded ranges."""
+    import ipaddress as _ip
+    try:
+        net = _ip.ip_network(cidr, strict=False)
+    except Exception:
+        return []
+    gw_ip = None
+    if gateway_cidr:
+        try:
+            gw_ip = _ip.ip_address(gateway_cidr.split("/")[0])
+        except Exception:
+            pass
+    excluded: set = set()
+    for tok in (excluded_str or "").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if "-" in tok:
+            try:
+                a, b = tok.split("-", 1)
+                for i in range(int(_ip.ip_address(a.strip())),
+                               int(_ip.ip_address(b.strip())) + 1):
+                    excluded.add(_ip.ip_address(i))
+            except Exception:
+                pass
+        else:
+            try:
+                excluded.add(_ip.ip_address(tok))
+            except Exception:
+                pass
+    result: list = []
+    for ip in net.hosts():
+        if ip == gw_ip or ip in excluded:
+            continue
+        result.append(str(ip))
+        if len(result) >= count:
+            break
+    return result
+
+
+def _vc_soap_login(vc_url, vc_user, vc_pass):
+    """Create an authenticated vCenter SOAP session. Returns (session, endpoint, headers)."""
+    s = requests.Session()
+    ep  = f"https://{vc_url}/sdk"
+    hdr = {"Content-Type": "text/xml", "SOAPAction": "urn:vim25/6.7"}
+    r = s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<Body><Login xmlns="urn:vim25">'
+        '<_this type="SessionManager">SessionManager</_this>'
+        f'<userName>{vc_user}</userName><password>{vc_pass}</password>'
+        '</Login></Body></Envelope>'))
+    if "LoginResponse" not in r.text:
+        raise RuntimeError(f"vCenter login failed: {r.text[:200]}")
+    return s, ep, hdr
+
+
+def _vc_soap_find_host(s, ep, hdr, fqdn):
+    """Find host MOR by FQDN using SearchIndex."""
+    import re as _re
+    r = s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<Body><FindByDnsName xmlns="urn:vim25">'
+        '<_this type="SearchIndex">SearchIndex</_this>'
+        f'<dnsName>{fqdn}</dnsName><vmSearch>false</vmSearch>'
+        '</FindByDnsName></Body></Envelope>'))
+    m = _re.search(r'<returnval type="HostSystem">([^<]+)</returnval>', r.text)
+    return m.group(1).strip() if m else None
+
+
+def _vc_soap_get_netsys_and_dvs(s, ep, hdr, host_moref):
+    """Return (netsys_moref, []) for a host.
+    The DVS list is no longer derived from the host (networkInfo.proxySwitch is gone
+    in vCenter 9); DVS lookup is done separately via _vc_soap_find_dvs_by_name."""
+    import re as _re
+    r = s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<Body><RetrieveProperties xmlns="urn:vim25">'
+        '<_this type="PropertyCollector">propertyCollector</_this>'
+        '<specSet><propSet><type>HostSystem</type><all>false</all>'
+        '<pathSet>configManager.networkSystem</pathSet></propSet>'
+        f'<objectSet><obj type="HostSystem">{host_moref}</obj></objectSet>'
+        '</specSet></RetrieveProperties></Body></Envelope>'))
+    # vCenter 9 returns <val xsi:type="ManagedObjectReference" type="HostNetworkSystem">
+    ns_m = _re.search(r'<val[^>]*type="HostNetworkSystem"[^>]*>([^<]+)</val>', r.text)
+    if not ns_m:
+        return None, []
+    return ns_m.group(1).strip(), []
+
+
+def _vc_soap_find_dvs_by_name(s, ep, hdr, dvs_name):
+    """Find a DVS MOR and UUID by display name.
+    Returns (dvs_mor, dvs_uuid) or (None, None).
+    Tries VmwareDistributedVirtualSwitch first (VCF/NSX uses this concrete type),
+    then falls back to the generic DistributedVirtualSwitch."""
+    import re as _re
+
+    def _scan(dvs_type):
+        r = s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+            '<Body><CreateContainerView xmlns="urn:vim25">'
+            '<_this type="ViewManager">ViewManager</_this>'
+            '<container type="Folder">group-d1</container>'
+            f'<type>{dvs_type}</type>'
+            '<recursive>true</recursive>'
+            '</CreateContainerView></Body></Envelope>'))
+        cv_m = _re.search(r'<returnval type="ContainerView">([^<]+)</returnval>', r.text)
+        if not cv_m:
+            return None, None
+        cv = cv_m.group(1)
+        # Retrieve both 'name' and 'uuid' for every DVS in one call
+        r2 = s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+            '<Body><RetrieveProperties xmlns="urn:vim25">'
+            '<_this type="PropertyCollector">propertyCollector</_this>'
+            f'<specSet>'
+            f'<propSet><type>{dvs_type}</type><all>false</all><pathSet>name</pathSet></propSet>'
+            f'<propSet><type>{dvs_type}</type><all>false</all><pathSet>uuid</pathSet></propSet>'
+            f'<objectSet><obj type="ContainerView">{cv}</obj>'
+            '<selectSet xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="TraversalSpec">'
+            '<type>ContainerView</type><path>view</path></selectSet>'
+            '</objectSet></specSet></RetrieveProperties></Body></Envelope>'))
+        # Build a map: mor → {name, uuid}
+        dvs_map: dict = {}
+        pat_obj = rf'<obj type="{_re.escape(dvs_type)}">([^<]+)</obj>'
+        pat_prop = r'<propSet><name>([^<]+)</name><val[^>]*>([^<]+)</val></propSet>'
+        # Split returnval blocks
+        for block in _re.finditer(
+                rf'<returnval>(<obj type="{_re.escape(dvs_type)}">[^<]+</obj>.*?)</returnval>',
+                r2.text, _re.DOTALL):
+            chunk = block.group(1)
+            m_obj = _re.search(pat_obj, chunk)
+            if not m_obj:
+                continue
+            mor = m_obj.group(1).strip()
+            dvs_map.setdefault(mor, {})
+            for pm in _re.finditer(pat_prop, chunk):
+                dvs_map[mor][pm.group(1)] = pm.group(2).strip()
+        for mor, props in dvs_map.items():
+            if props.get("name", "").lower() == dvs_name.lower():
+                return mor, props.get("uuid", "")
+        return None, None
+
+    mor, uid = _scan("VmwareDistributedVirtualSwitch")
+    if mor:
+        return mor, uid
+    return _scan("DistributedVirtualSwitch")
+
+
+# Keep legacy name as alias (still called in a couple places)
+def _vc_soap_find_dvs(s, ep, hdr, dvs_uuid_or_name):
+    mor, _ = _vc_soap_find_dvs_by_name(s, ep, hdr, dvs_uuid_or_name)
+    return mor
+
+
+def _vc_soap_ensure_dvpg(s, ep, hdr, dvs_moref, pg_name, vlan_id):
+    """Create (or find existing) DVPortGroup with given VLAN. Returns (dvpg_moref, created_by_us)."""
+    import re as _re, time as _time
+    create_body = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<Body><AddDVPortgroup_Task xmlns="urn:vim25">'
+        f'<_this type="DistributedVirtualSwitch">{dvs_moref}</_this>'
+        '<spec>'
+        f'<name>{pg_name}</name><type>earlyBinding</type><numPorts>16</numPorts>'
+        '<defaultPortConfig>'
+        '<vlan xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"'
+        ' xsi:type="VmwareDistributedVirtualSwitchVlanIdSpec">'
+        f'<inherited>false</inherited><vlanId>{vlan_id}</vlanId>'
+        '</vlan></defaultPortConfig>'
+        '</spec>'
+        '</AddDVPortgroup_Task></Body></Envelope>')
+    r = s.post(ep, verify=False, timeout=30, headers=hdr, data=create_body)
+    task_m = _re.search(r'<returnval type="Task">([^<]+)</returnval>', r.text)
+    if task_m:
+        task = task_m.group(1)
+        for _ in range(30):
+            _time.sleep(1)
+            rt = s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+                '<?xml version="1.0" encoding="UTF-8"?>'
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><RetrieveProperties xmlns="urn:vim25">'
+                '<_this type="PropertyCollector">propertyCollector</_this>'
+                '<specSet><propSet><type>Task</type><all>false</all>'
+                '<pathSet>info.state</pathSet><pathSet>info.result</pathSet>'
+                '<pathSet>info.error</pathSet></propSet>'
+                f'<objectSet><obj type="Task">{task}</obj></objectSet>'
+                '</specSet></RetrieveProperties></Body></Envelope>'))
+            st = _re.search(r'<val>(\w+)</val>', rt.text)
+            state = st.group(1) if st else 'unknown'
+            if state == 'success':
+                res_m = _re.search(
+                    r'<val type="DistributedVirtualPortgroup">([^<]+)</val>', rt.text)
+                if res_m:
+                    return res_m.group(1).strip(), True
+                break
+            elif state == 'error':
+                em = _re.search(r'<localizedMessage>([^<]+)</localizedMessage>', rt.text)
+                raise RuntimeError(f"DVPortGroup creation failed: {em.group(1) if em else rt.text[:300]}")
+    # If task missing or result not found: find existing portgroup by name
+    r3 = s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<Body><RetrieveProperties xmlns="urn:vim25">'
+        '<_this type="PropertyCollector">propertyCollector</_this>'
+        '<specSet><propSet><type>DistributedVirtualPortgroup</type><all>false</all>'
+        '<pathSet>name</pathSet></propSet>'
+        f'<objectSet><obj type="DistributedVirtualSwitch">{dvs_moref}</obj>'
+        '<selectSet xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="TraversalSpec">'
+        '<type>DistributedVirtualSwitch</type><path>portgroup</path></selectSet>'
+        '</objectSet></specSet></RetrieveProperties></Body></Envelope>'))
+    # <val> may carry xsi:type attribute → use [^>]* to match any attrs
+    for m in _re.finditer(
+            r'<obj type="DistributedVirtualPortgroup">([^<]+)</obj>.*?<val[^>]*>([^<]+)</val>',
+            r3.text, _re.DOTALL):
+        if m.group(2).strip() == pg_name:
+            return m.group(1).strip(), False
+    raise RuntimeError(f"Could not create or locate DVPortGroup '{pg_name}'")
+
+
+def _vc_soap_get_dvpg_key(s, ep, hdr, dvpg_moref):
+    """Get the DVPortGroup's portgroup key."""
+    import re as _re
+    r = s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<Body><RetrieveProperties xmlns="urn:vim25">'
+        '<_this type="PropertyCollector">propertyCollector</_this>'
+        '<specSet><propSet><type>DistributedVirtualPortgroup</type><all>false</all>'
+        '<pathSet>key</pathSet></propSet>'
+        f'<objectSet><obj type="DistributedVirtualPortgroup">{dvpg_moref}</obj></objectSet>'
+        '</specSet></RetrieveProperties></Body></Envelope>'))
+    # <val> may carry xsi:type attribute → use [^>]* to match any attrs
+    m = _re.search(r'<val[^>]*>([^<]+)</val>', r.text)
+    return m.group(1).strip() if m else None
+
+
+def _vc_soap_add_vmk(s, ep, hdr, netsys_moref, dvs_uuid, dvpg_key, ip_str, prefix_len):
+    """Add a VMkernel NIC on a DVPortGroup. Returns device name (e.g. 'vmk5')."""
+    import re as _re, ipaddress as _ip
+    mask = str(_ip.IPv4Network(f"0.0.0.0/{prefix_len}").netmask)
+    r = s.post(ep, verify=False, timeout=30, headers=hdr, data=(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<Body><AddVirtualNic xmlns="urn:vim25">'
+        f'<_this type="HostNetworkSystem">{netsys_moref}</_this>'
+        '<portgroup></portgroup>'
+        '<nic>'
+        '<distributedVirtualPort>'
+        f'<switchUuid>{dvs_uuid}</switchUuid>'
+        f'<portgroupKey>{dvpg_key}</portgroupKey>'
+        '</distributedVirtualPort>'
+        '<ip><dhcp>false</dhcp>'
+        f'<ipAddress>{ip_str}</ipAddress>'
+        f'<subnetMask>{mask}</subnetMask>'
+        '</ip>'
+        '</nic>'
+        '</AddVirtualNic></Body></Envelope>'))
+    m = _re.search(r'<returnval>([^<]+)</returnval>', r.text)
+    if m:
+        return m.group(1).strip()
+    fm = _re.search(r'<faultstring>([^<]+)</faultstring>', r.text)
+    raise RuntimeError(fm.group(1) if fm else f"AddVirtualNic failed: {r.text[:300]}")
+
+
+def _vc_soap_remove_vmk(s, ep, hdr, netsys_moref, device):
+    """Remove a VMkernel NIC."""
+    s.post(ep, verify=False, timeout=15, headers=hdr, data=(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<Body><RemoveVirtualNic xmlns="urn:vim25">'
+        f'<_this type="HostNetworkSystem">{netsys_moref}</_this>'
+        f'<device>{device}</device>'
+        '</RemoveVirtualNic></Body></Envelope>'))
+
+
+def _vc_soap_destroy_dvpg(s, ep, hdr, dvpg_moref):
+    """Destroy a DVPortGroup (best-effort)."""
+    s.post(ep, verify=False, timeout=30, headers=hdr, data=(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+        '<Body><Destroy_Task xmlns="urn:vim25">'
+        f'<_this type="DistributedVirtualPortgroup">{dvpg_moref}</_this>'
+        '</Destroy_Task></Body></Envelope>'))
+
+
+def _pcli_setup_vlan_test(vc_url, vc_user, vc_pass, vds_name, pg_name, vlan_id, host_ips):
+    """
+    PowerCLI: creates DVPortGroup + one vmk per host via New-VMHostNetworkAdapter.
+    host_ips: list of (fqdn, ip_str, mask_str) tuples.
+    Returns (vmk_map, pg_created, error_str)
+      vmk_map: {fqdn: vmk_name}
+    """
+    import subprocess, tempfile, os, textwrap
+    vc_host = vc_url.replace("https://", "").replace("http://", "").rstrip("/")
+
+    per_host_lines = []
+    for fqdn, ip, mask in host_ips:
+        per_host_lines.append(textwrap.dedent(f"""            try {{
+                $vmhost = Get-VMHost -Name '{fqdn}'
+                Get-VMHostNetworkAdapter -VMHost $vmhost -PortGroup $pg -ErrorAction SilentlyContinue | Remove-VMHostNetworkAdapter -Confirm:$false
+                $vmk = New-VMHostNetworkAdapter -VMHost $vmhost -VirtualSwitch $vds -PortGroup $pg -IP '{ip}' -SubnetMask '{mask}' -Confirm:$false
+                Write-Host "VMK:{fqdn}:$($vmk.Name)"
+            }} catch {{
+                Write-Host "VMK_ERR:{fqdn}:$($_.Exception.Message)"
+            }}"""))
+
+    script = textwrap.dedent(f"""\
+        $ErrorActionPreference = 'Stop'
+        Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false -Scope Session | Out-Null
+        Connect-VIServer -Server '{vc_host}' -User '{vc_user}' -Password '{vc_pass}' -Force | Out-Null
+        $vds = Get-VDSwitch -Name '{vds_name}'
+        Get-VDPortgroup -Name '{pg_name}' -ErrorAction SilentlyContinue | Remove-VDPortgroup -Confirm:$false
+        $pg = New-VDPortgroup -VDSwitch $vds -Name '{pg_name}' -VlanId {vlan_id} -NumPorts 16
+        Write-Host "PG:CREATED:{pg_name}"
+        Start-Sleep -Seconds 3
+        {chr(10).join(per_host_lines)}
+        Disconnect-VIServer -Confirm:$false | Out-Null
+        Write-Host "PCLI_SETUP_DONE"
+    """)
+    with tempfile.NamedTemporaryFile(suffix=".ps1", mode="w", delete=False, prefix="vcf_setup_") as f:
+        f.write(script); script_path = f.name
+    try:
+        r = subprocess.run(["pwsh", "-NonInteractive", "-File", script_path],
+                           capture_output=True, text=True, timeout=150)
+        out = r.stdout + r.stderr
+        if "PCLI_SETUP_DONE" not in out:
+            return {}, False, f"PowerCLI setup failed (no DONE marker):\n{out[:800]}"
+        pg_created = "PG:CREATED:" in out
+        vmk_map = {}
+        for line in out.splitlines():
+            if line.startswith("VMK:"):
+                parts = line.split(":", 2)
+                if len(parts) == 3:
+                    vmk_map[parts[1]] = parts[2].strip()
+        return vmk_map, pg_created, ""
+    except FileNotFoundError:
+        return {}, False, "PowerShell (pwsh) not found — install via: snap install powershell --classic"
+    except subprocess.TimeoutExpired:
+        return {}, False, "PowerCLI timed out during setup (>150s)"
+    finally:
+        try: os.unlink(script_path)
+        except Exception: pass
+
+
+def _pcli_cleanup_vlan_test(vc_url, vc_user, vc_pass, pg_name, host_fqdns):
+    """PowerCLI: removes vmks on all hosts + DVPortGroup (best-effort)."""
+    import subprocess, tempfile, os, textwrap
+    vc_host = vc_url.replace("https://", "").replace("http://", "").rstrip("/")
+    host_array = ", ".join(f"\'{h}\'" for h in host_fqdns)
+    script = textwrap.dedent(f"""\
+        $ErrorActionPreference = 'SilentlyContinue'
+        Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false -Scope Session | Out-Null
+        Connect-VIServer -Server '{vc_host}' -User '{vc_user}' -Password '{vc_pass}' -Force | Out-Null
+        $pg = Get-VDPortgroup -Name '{pg_name}' -ErrorAction SilentlyContinue
+        if ($pg) {{
+            foreach ($fqdn in @({host_array})) {{
+                try {{
+                    $vmhost = Get-VMHost -Name $fqdn
+                    Get-VMHostNetworkAdapter -VMHost $vmhost -PortGroup $pg -ErrorAction SilentlyContinue | Remove-VMHostNetworkAdapter -Confirm:$false
+                }} catch {{}}
+            }}
+            $pg | Remove-VDPortgroup -Confirm:$false
+        }}
+        Disconnect-VIServer -Confirm:$false | Out-Null
+    """)
+    with tempfile.NamedTemporaryFile(suffix=".ps1", mode="w", delete=False, prefix="vcf_cleanup_") as f:
+        f.write(script); script_path = f.name
+    try:
+        subprocess.run(["pwsh", "-NonInteractive", "-File", script_path],
+                       capture_output=True, text=True, timeout=90)
+    except Exception:
+        pass
+    finally:
+        try: os.unlink(script_path)
+        except Exception: pass
+
+
+@app.route("/api/check-vlan", methods=["POST"])
+def check_vlan():
+    """
+    VLAN connectivity check for NSX-VPC Distributed mode.
+    1. PowerCLI creates temp DVPortGroup + one vmk per host via New-VMHostNetworkAdapter.
+    2. SSH to each host: vmkping the DVLAN gateway.
+    3. PowerCLI removes all vmks + portgroup.
+    """
+    body     = request.get_json(force=True)
+    vc_url   = normalize_url(body.get("vc_url",  ""))
+    vc_user  = body.get("username", "")
+    vc_pass  = body.get("password", "")
+    nsx_raw  = (body.get("nsx_url") or "").strip()
+    nsx_url  = normalize_url(nsx_raw) if nsx_raw else guess_nsx_url(vc_url)
+    nsx_user = body.get("nsx_user", "")
+    nsx_pass = body.get("nsx_pass", "")
+    esx_pass       = body.get("esx_pass", "")
+    host_passwords = body.get("host_passwords") or {}
+
+    result: dict = {"success": False, "tests": [], "summary": "", "error": None}
+    pg_name = None
+    hosts   = []
+
+    try:
+        import ipaddress as _ip, time as _time, paramiko as _para
+
+        # ── 1. DVLAN connection details ──────────────────────────────────────
+        dvlan_id_req = (body.get("dvlan_id") or "").strip()
+        dvlans = (nsx_get(nsx_url, nsx_user, nsx_pass,
+            "/policy/api/v1/infra/distributed-vlan-connections") or {}).get("results", [])
+        if not dvlans:
+            result["error"] = "No Distributed External Connection found — complete S5-1 first."
+            return jsonify(result)
+        dvlan = next((d for d in dvlans if d.get("id") == dvlan_id_req), dvlans[0])
+        vlan_id    = dvlan.get("vlan_id", 0)
+        gw_addrs   = dvlan.get("gateway_addresses") or []
+        if not gw_addrs:
+            result["error"] = "DVLAN connection has no gateway address configured."
+            return jsonify(result)
+        gateway_cidr = gw_addrs[0]
+        gateway_ip   = gateway_cidr.split("/")[0]
+        prefix_len   = int(gateway_cidr.split("/")[1])
+        dvlan_net    = _ip.ip_interface(gateway_cidr).network
+        mask_str     = str(_ip.IPv4Network(f"0.0.0.0/{prefix_len}").netmask)
+
+        # ── 2. External IP Block overlapping the DVLAN subnet ──────────────
+        all_blocks = (nsx_get(nsx_url, nsx_user, nsx_pass,
+            "/policy/api/v1/infra/ip-blocks") or {}).get("results", [])
+        block_cidr = excl_str = None
+        for b in all_blocks:
+            if (b.get("visibility") or "").upper() != "EXTERNAL":
+                continue
+            cidr = _block_cidr(b, nsx_url, nsx_user, nsx_pass)
+            try:
+                if cidr and _ip.ip_network(cidr, strict=False).overlaps(dvlan_net):
+                    block_cidr = cidr
+                    desc = b.get("description", "")
+                    excl_str = desc.split("Excluded ranges:")[1].strip() \
+                               if "Excluded ranges:" in desc else ""
+                    break
+            except Exception:
+                pass
+        if not block_cidr:
+            result["error"] = "No External IP Block matching the DVLAN subnet — complete S5-3 first."
+            return jsonify(result)
+
+        # ── 3. Prepared ESX hosts + NSX VDS name ───────────────────────────
+        htns = (nsx_get(nsx_url, nsx_user, nsx_pass,
+            "/policy/api/v1/infra/sites/default/enforcement-points"
+            "/default/host-transport-nodes") or {}).get("results", [])
+        nsx_vds_name = ""
+        for h in htns:
+            fqdn = (h.get("node_deployment_info") or {}).get("fqdn") or h.get("display_name", "")
+            if not fqdn: continue
+            hosts.append(fqdn)
+            if not nsx_vds_name:
+                for hs in (h.get("host_switch_spec") or {}).get("host_switches") or []:
+                    nsx_vds_name = hs.get("host_switch_name", "")
+                    if nsx_vds_name: break
+        if not hosts:
+            result["error"] = "No prepared ESX hosts found — complete S3 (NSX Host Preparation) first."
+            return jsonify(result)
+        if not nsx_vds_name:
+            result["error"] = "Could not determine NSX VDS name from host transport nodes."
+            return jsonify(result)
+
+        # ── 4. Allocate temp IPs ─────────────────────────────────────────────
+        temp_ips = _pick_temp_ips(block_cidr, gateway_cidr, excl_str, len(hosts))
+        if not temp_ips:
+            result["error"] = "No available IPs in External IP Block for temp vmk."
+            return jsonify(result)
+        hosts = hosts[:len(temp_ips)]
+
+        # ── 5. PowerCLI: create portgroup + vmk on every host ──────────────
+        pg_name = f"vcf-vlan-check-{vlan_id}"
+        host_ips_arg = [(h, temp_ips[i], mask_str) for i, h in enumerate(hosts)]
+        vmk_map, _pg_created, setup_err = _pcli_setup_vlan_test(
+            vc_url, vc_user, vc_pass, nsx_vds_name, pg_name, vlan_id, host_ips_arg)
+        if setup_err:
+            result["error"] = f"PowerCLI setup failed: {setup_err}"
+            return jsonify(result)
+
+        # ── 6. Per-host: SSH → vmkping ────────────────────────────────────
+        for idx, fqdn in enumerate(hosts):
+            temp_ip = temp_ips[idx]
+            vmk_dev = vmk_map.get(fqdn)
+            test: dict = {
+                "host": fqdn, "vlan_id": vlan_id,
+                "temp_ip": temp_ip, "gateway": gateway_ip,
+                "vmk": vmk_dev, "result": "error", "output": "", "error": None
+            }
+            result["tests"].append(test)
+            steps = [f"✓ VDS='{nsx_vds_name}', PG='{pg_name}' (VLAN {vlan_id})",
+                     f"✓ Temp IP={temp_ip}/{prefix_len}, Gateway={gateway_ip}"]
+            ssh_state = None
+            ssh_client = None
+
+            try:
+                if not vmk_dev:
+                    test["error"] = (f"PowerCLI failed to create vmk on {fqdn}. "
+                                     f"Check PowerCLI setup output for VMK_ERR lines.")
+                    test["output"] = "\n".join(steps); continue
+
+                steps.append(f"✓ vmk created via PowerCLI: {vmk_dev} with IP {temp_ip}/{prefix_len}")
+
+                ok_ssh, ssh_state = _vc_manage_ssh(vc_url, vc_user, vc_pass, fqdn, True)
+                if not ok_ssh:
+                    test["error"] = f"Could not enable SSH on {fqdn} via vCenter"
+                    test["output"] = "\n".join(steps); continue
+                if not ssh_state:
+                    _time.sleep(5)
+                steps.append("✓ SSH enabled")
+
+                host_pwd = host_passwords.get(fqdn) or esx_pass
+                ssh_client = _para.SSHClient()
+                ssh_client.set_missing_host_key_policy(_para.AutoAddPolicy())
+                for attempt in range(6):
+                    try:
+                        ssh_client.connect(fqdn, username="root",
+                                           password=host_pwd, timeout=10)
+                        break
+                    except Exception as e_ssh:
+                        if attempt < 5: _time.sleep(2)
+                        else: raise RuntimeError(
+                            f"SSH to {fqdn} failed: {e_ssh}\n"
+                            "Check that this VM can reach ESX port 22.") from e_ssh
+                steps.append("✓ SSH connected")
+
+                def _run(cmd, timeout=30):
+                    _, so, se = ssh_client.exec_command(cmd, timeout=timeout)
+                    return so.read().decode("utf-8","replace"), se.read().decode("utf-8","replace")
+
+                _time.sleep(2)   # brief pause for vmk IP stack to initialise
+
+                ping_out, ping_err = _run(
+                    f"vmkping -I {vmk_dev} -d -s 28 {gateway_ip}", timeout=30)
+                ping_combined = (ping_out + ping_err).strip()
+                steps.append(f"vmkping:\n{ping_combined}" if ping_combined
+                              else "vmkping: no output")
+                test["output"] = "\n".join(steps)
+                test["result"] = (
+                    "pass" if ("0% packet loss" in ping_out or "bytes from" in ping_out)
+                    else "fail")
+
+            except Exception as exc:
+                test["error"] = f"{exc}\n{traceback.format_exc()}"
+                test["output"] = "\n".join(steps)
+            finally:
+                if ssh_client:
+                    try: ssh_client.close()
+                    except Exception: pass
+                if ssh_state is False:
+                    try: _vc_manage_ssh(vc_url, vc_user, vc_pass, fqdn, False)
+                    except Exception: pass
+
+        passed = sum(1 for t in result["tests"] if t["result"] == "pass")
+        total  = len(result["tests"])
+        result["success"] = total > 0 and passed == total
+        result["summary"] = f"{passed}/{total} host(s) passed VLAN {vlan_id} connectivity test"
+
+    except Exception:
+        result["error"] = traceback.format_exc()
+    finally:
+        if pg_name and hosts:
+            try: _pcli_cleanup_vlan_test(vc_url, vc_user, vc_pass, pg_name, hosts)
+            except Exception: pass
+
+    return jsonify(result)
+    return jsonify(result)
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=80, debug=False)
