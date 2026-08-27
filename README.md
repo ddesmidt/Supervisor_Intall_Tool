@@ -44,6 +44,8 @@ The tool displays three side-by-side columns — one per deployment mode — eac
 
 ## Quick Start
 
+> **Broadcom employees:** A pre-built VM OVA with the application already installed is available at [Google Drive](https://drive.google.com/drive/folders/18pSjWNkDO_Xvin7IC3GqwO3maEQeEZNG). Deploy the OVA and skip the install steps below.
+
 ### Prerequisites
 
 - A Linux VM inside your VCF environment with:

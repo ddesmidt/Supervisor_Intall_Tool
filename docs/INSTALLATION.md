@@ -4,6 +4,12 @@ This guide walks through deploying the **vSphere Supervisor Readiness Check + In
 
 ---
 
+> **Broadcom employees:** A pre-built VM OVA with the application already installed is available at:
+> [https://drive.google.com/drive/folders/18pSjWNkDO_Xvin7IC3GqwO3maEQeEZNG](https://drive.google.com/drive/folders/18pSjWNkDO_Xvin7IC3GqwO3maEQeEZNG)
+> Deploy the OVA and skip to [Step 6 — Verify](#step-6--verify).
+
+---
+
 ## VM Requirements
 
 | Resource | Minimum |
