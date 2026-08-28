@@ -10,6 +10,7 @@ from flask import Flask, jsonify, render_template, request
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 app = Flask(__name__)
+app.config['TEMPLATES_AUTO_RELOAD'] = True
 
 SESS = requests.Session()
 SESS.verify = False
@@ -452,6 +453,16 @@ def check_requirements():
                 return _is_external_ip_block(b.get("cidr", ""))
             d["ext_blocks"] = [b for b in all_blocks if _block_is_external(b)]
             d["int_blocks"] = [b for b in all_blocks if not _block_is_external(b)]
+            # NSX list endpoint omits excluded_ips — fetch each ext block individually
+            for b in d["ext_blocks"]:
+                if not b.get("excluded_ips"):
+                    try:
+                        full = nsx_get(nsx_url, nsx_user, nsx_pass,
+                                       f"/policy/api/v1/infra/ip-blocks/{b['id']}")
+                        if full:
+                            b["excluded_ips"] = full.get("excluded_ips", [])
+                    except Exception:
+                        pass
         except Exception as e:
             d["ext_blocks"] = []; d["int_blocks"] = []; d["blocks_error"] = str(e)
 
@@ -556,12 +567,9 @@ def check_requirements():
         nsx_na = "Not required for this deployment mode."
 
         if mode == "vds_flb":
-            add("3", "NSX Host Preparation", "info", "Not required for VDS/FLB mode", nsx_na)
-            add("4", "NSX Networking",        "info", "Not required for VDS/FLB mode", nsx_na)
-            add("5-1", "External Connection",   "info", "Not required for VDS/FLB mode", nsx_na)
-            add("5-2", "TGW Attachment",         "info", "Not required for VDS/FLB mode", nsx_na)
-            add("5-3", "External IP Block",     "info", "Not required for VDS/FLB mode", nsx_na)
-            add("5-4", "VPC Profile",           "info", "Not required for VDS/FLB mode", nsx_na)
+            add("3", "VLANs/Subnets for Supervisor and FLB", "info",
+                "Validation to do by Admin",
+                "Supervisor deployment with VDS requires subnets for Supervisor and FLB.")
         elif not nsx_url:
             ext_conn_name = ("Distributed External Connection" if mode == "distributed"
                              else "Centralized External Connection" if mode == "centralized"
@@ -894,9 +902,9 @@ def check_requirements():
                     detail_lines = []
                     for b in valid_blocks:
                         line = f"· {b.get('display_name', b.get('id','?'))}\n  CIDR: {b.get('cidr','?')}"
-                        desc = (b.get("description") or "").strip()
-                        if desc:
-                            line += f"\n  {desc}"
+                        excl = _nsx_excl_to_str(b)
+                        if excl:
+                            line += f"\n  Excluded ranges: {excl}"
                         detail_lines.append(line)
                     add("5-3", "External IP Block", "ok",
                         f"{len(valid_blocks)} External IP block(s): {', '.join(block_info)}",
@@ -1852,6 +1860,86 @@ def _nsx_put(nsx_url, nsx_user, nsx_pass, path, payload):
     )
 
 
+def _nsx_excl_to_str(block):
+    """Return excluded ranges as a comma-separated string.
+    NSX stores these in the 'excluded_ips' field (list of {start, end}).
+    Falls back to legacy 'Excluded ranges:' description convention.
+    """
+    ranges = block.get("excluded_ips") or block.get("excluded_ip_ranges") or []
+    if ranges:
+        parts = []
+        for r in ranges:
+            s, e = r.get("start", ""), r.get("end", "")
+            parts.append(s if s == e else f"{s}-{e}")
+        return ", ".join(parts)
+    desc = block.get("description", "")
+    if "Excluded ranges:" in desc:
+        return desc.split("Excluded ranges:", 1)[1].strip()
+    return ""
+
+
+def _str_to_nsx_excl(excl_str):
+    """Parse comma-separated exclusion string into NSX IpRange list [{start, end}, ...]."""
+    result = []
+    for tok in excl_str.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if "-" in tok:
+            parts = tok.split("-", 1)
+            result.append({"start": parts[0].strip(), "end": parts[1].strip()})
+        else:
+            result.append({"start": tok, "end": tok})
+    return result
+
+
+def _consolidate_ip_ranges(items):
+    """Sort, deduplicate, and merge consecutive IPs/ranges into compact IpRange list.
+
+    Input: list of bare IP strings or 'start-end' strings.
+    Output: [{start, end}, ...] with consecutive IPs merged.
+
+    Examples:
+      [11, 12, 13]        → [{11, 13}]
+      [11, 12, 13, 21, 22]→ [{11, 13}, {21, 22}]
+      [11, 21, 31]        → [{11, 11}, {21, 21}, {31, 31}]
+    """
+    import ipaddress as _ip
+    addrs: set = set()
+    for item in items:
+        item = str(item).strip()
+        if not item:
+            continue
+        if "-" in item:
+            parts = item.split("-", 1)
+            try:
+                s = int(_ip.ip_address(parts[0].strip()))
+                e = int(_ip.ip_address(parts[1].strip()))
+                addrs.update(range(s, e + 1))
+            except Exception:
+                pass
+        else:
+            try:
+                addrs.add(int(_ip.ip_address(item)))
+            except Exception:
+                pass
+    if not addrs:
+        return []
+    sorted_addrs = sorted(addrs)
+    ranges: list = []
+    start = end = sorted_addrs[0]
+    for addr in sorted_addrs[1:]:
+        if addr == end + 1:
+            end = addr
+        else:
+            ranges.append({"start": str(_ip.ip_address(start)),
+                           "end":   str(_ip.ip_address(end))})
+            start = end = addr
+    ranges.append({"start": str(_ip.ip_address(start)),
+                   "end":   str(_ip.ip_address(end))})
+    return ranges
+
+
 # ── Fix: fetch all NSX state needed for S4-S7 wizards ────────────────────────
 
 @app.route("/api/fix/nsx-prereq-options", methods=["POST"])
@@ -2138,7 +2226,7 @@ def fix_create_ip_block():
     try:
         payload = {"id": name, "display_name": name, "cidr": cidr, "visibility": "EXTERNAL"}
         if excluded_ranges:
-            payload["description"] = f"Excluded ranges: {excluded_ranges}"
+            payload["excluded_ips"] = _str_to_nsx_excl(excluded_ranges)
         r = _nsx_put(nsx_url, nsx_user, nsx_pass,
                      f"/policy/api/v1/infra/ip-blocks/{name}", payload)
         if r.ok:
@@ -2146,6 +2234,59 @@ def fix_create_ip_block():
         else:
             result["error"] = _nsx_error(r)
     except Exception as e:
+        result["error"] = traceback.format_exc()
+    return jsonify(result)
+
+
+@app.route("/api/fix/add-ip-block-exclusion", methods=["POST"])
+def fix_add_ip_block_exclusion():
+    """Add IPs to the Excluded Ranges description of an existing External IP Block."""
+    body = request.get_json(force=True)
+    nsx_url, nsx_user, nsx_pass = _nsx_creds(body)
+    ip_block_path = body.get("ip_block_path", "")
+    ips_to_add    = body.get("ips", [])  # list of IP strings
+    result = {"success": False, "error": None}
+    if not ip_block_path or not ips_to_add:
+        result["error"] = "ip_block_path and ips are required"
+        return jsonify(result)
+    try:
+        # GET current block
+        block = nsx_get(nsx_url, nsx_user, nsx_pass,
+                        f"/policy/api/v1{ip_block_path}")
+        if not block:
+            result["error"] = "IP Block not found"
+            return jsonify(result)
+        # Collect all existing IPs/ranges from NSX field (+ description fallback)
+        existing_ranges = block.get("excluded_ips") or block.get("excluded_ip_ranges") or []
+        existing_items = []
+        for r_ in existing_ranges:
+            s, e = r_.get("start", ""), r_.get("end", "")
+            existing_items.append(s if s == e else f"{s}-{e}")
+        if not existing_items:
+            desc = block.get("description", "")
+            if "Excluded ranges:" in desc:
+                existing_items = [x.strip() for x in
+                                  desc.split("Excluded ranges:", 1)[1].split(",")
+                                  if x.strip()]
+        # Merge existing + new IPs then consolidate into compact consecutive ranges
+        new_ranges = _consolidate_ip_ranges(existing_items + ips_to_add)
+        new_excl_str = ", ".join(
+            x["start"] if x["start"] == x["end"] else f"{x['start']}-{x['end']}"
+            for x in new_ranges
+        )
+        # Build payload: keep all existing block fields, write to excluded_ips (NSX native field)
+        payload = {**block, "excluded_ips": new_ranges}
+        # Clean up old description-based convention if present
+        if "Excluded ranges:" in (payload.get("description") or ""):
+            prefix = payload["description"].split("Excluded ranges:", 1)[0].rstrip()
+            payload["description"] = prefix if prefix else ""
+        r = _nsx_put(nsx_url, nsx_user, nsx_pass,
+                     f"/policy/api/v1{ip_block_path}", payload)
+        if r.ok:
+            result.update(success=True, new_excluded=new_excl_str)
+        else:
+            result["error"] = _nsx_error(r)
+    except Exception:
         result["error"] = traceback.format_exc()
     return jsonify(result)
 
@@ -3282,6 +3423,7 @@ def check_vlan():
         all_blocks = (nsx_get(nsx_url, nsx_user, nsx_pass,
             "/policy/api/v1/infra/ip-blocks") or {}).get("results", [])
         block_cidr = excl_str = None
+        ip_block_id = ip_block_name = ip_block_path = ""
         for b in all_blocks:
             if (b.get("visibility") or "").upper() != "EXTERNAL":
                 continue
@@ -3289,9 +3431,13 @@ def check_vlan():
             try:
                 if cidr and _ip.ip_network(cidr, strict=False).overlaps(dvlan_net):
                     block_cidr = cidr
-                    desc = b.get("description", "")
-                    excl_str = desc.split("Excluded ranges:")[1].strip() \
-                               if "Excluded ranges:" in desc else ""
+                    ip_block_id   = b.get("id", "")
+                    ip_block_name = b.get("display_name", ip_block_id)
+                    ip_block_path = b.get("path", f"/infra/ip-blocks/{ip_block_id}")
+                    # List endpoint omits excluded_ip_ranges — fetch individual block
+                    full_block = nsx_get(nsx_url, nsx_user, nsx_pass,
+                                         f"/policy/api/v1/infra/ip-blocks/{ip_block_id}") or b
+                    excl_str = _nsx_excl_to_str(full_block)
                     break
             except Exception:
                 pass
@@ -3385,6 +3531,7 @@ def check_vlan():
         _prescan_conflict: str | None    = None
         _prescan_steps:    list          = []
         _prescan_ssh_was_on: bool | None = None  # tracks host-0 SSH state for cleanup
+        _conflict_ips:     list          = []
         _vmk0 = vmk_map.get(hosts[0])
 
         if _prescan_ips and _vmk0:
@@ -3438,7 +3585,20 @@ def check_vlan():
                             _sl.append(f"rm -f /tmp/_vp_{_k} 2>/dev/null")
                     _sl.append("echo SCAN_DONE")
                     _sto = max(30, (len(_prescan_ips) // BATCH + 1) * 2 + 10)
-                    _sout, _ = _prun("\n".join(_sl), timeout=_sto)
+                    # ESXi busybox sh has an ~8 KB inline-command limit.
+                    # Upload the script via SFTP and execute it as a file.
+                    _scan_remote = "/tmp/_vcf_scan.sh"
+                    try:
+                        _sftp = _pssh.open_sftp()
+                        with _sftp.open(_scan_remote, "w") as _sf:
+                            _sf.write("\n".join(_sl))
+                        _sftp.close()
+                    except Exception as _sftp_e:
+                        raise RuntimeError(
+                            f"SFTP upload of scan script failed: {_sftp_e}"
+                        ) from _sftp_e
+                    _sout, _ = _prun(
+                        f"sh {_scan_remote}; rm -f {_scan_remote}", timeout=_sto)
 
                     _conflict_ips: list = [
                         ln.split("RESPOND:", 1)[1].strip()
@@ -3595,6 +3755,11 @@ def check_vlan():
         conflicts = [t["conflict"] for t in result["tests"] if t.get("conflict")]
         gw_ok     = total > 0 and passed == total
         result["success"] = gw_ok and not conflicts
+        # IP block info + conflict IPs for the auto-fix button
+        result["ip_block_id"]   = ip_block_id
+        result["ip_block_name"] = ip_block_name
+        result["ip_block_path"] = ip_block_path
+        result["conflict_ips"]  = list(_conflict_ips)
         if gw_ok and not conflicts:
             result["summary"] = f"{passed}/{total} host(s) passed VLAN {vlan_id} connectivity test"
         elif gw_ok and conflicts:

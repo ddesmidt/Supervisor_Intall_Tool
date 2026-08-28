@@ -55,6 +55,19 @@
     .step-row.clickable:hover { background: #f3f6fa; cursor: pointer; }
     .step-row.no-click { cursor: default; }
 
+    /* Architecture diagram floating panel */
+    .diagram-lightbox {
+      position: fixed !important;
+      top: 50%;
+      right: 2vw;
+      transform: translateY(-50%);
+      z-index: 99999;
+      pointer-events: none; /* let clicks pass through to page */
+    }
+    .diagram-lightbox > div {
+      pointer-events: auto; /* but re-enable on the image itself */
+    }
+
     /* Details drawer under a step row */
     .step-details {
       padding: 0.6rem 0.8rem;
@@ -121,12 +134,13 @@
       padding: 0.15rem 0.45rem;
       border-radius: 2px;
     }
-    .status-chip.ready       { background: #dff0d0; color: #48960c; }
-    .status-chip.warnings    { background: #fdf5e0; color: #e07400; }
-    .status-chip.issues      { background: #fae8e8; color: #c21d00; }
-    .status-chip.configuring { background: #dce9f4; color: #0072a3; }
-    .status-chip.running     { background: #dff0d0; color: #48960c; }
-    .status-chip.error       { background: #fae8e8; color: #c21d00; }
+    .status-chip.ready        { background: #dff0d0; color: #48960c; }
+    .status-chip.warnings     { background: #fdf5e0; color: #e07400; }
+    .status-chip.issues       { background: #fae8e8; color: #c21d00; }
+    .status-chip.to_validate  { background: #edf0f2; color: #6e777b; }
+    .status-chip.configuring  { background: #dce9f4; color: #0072a3; }
+    .status-chip.running      { background: #dff0d0; color: #48960c; }
+    .status-chip.error        { background: #fae8e8; color: #c21d00; }
 
     /* Cluster / storage policy selector rows */
     .sel-row {
@@ -467,9 +481,9 @@
                              (installResult.clusters[0] && installResult.clusters[0].config_status === 'ERROR')   ? 'fas fa-circle-xmark' :
                              'fas fa-circle-notch fa-spin'"
                      style="font-size:0.9rem;"></i>
-                  <span x-text="installResult.error ? 'Authentication Failed' :
+                  <span x-html="installResult.error ? 'Authentication Failed' :
                         !installResult.installed
-                          ? 'Supervisor is NOT Installed'
+                          ? 'Supervisor is <span style=&quot;color:#c92100;&quot;>NOT</span> Installed'
                           : 'Supervisor ' + (installResult.clusters[0]
                               ? (installResult.clusters[0].supervisor || installResult.clusters[0].cluster_name || installResult.clusters[0].cluster || '')
                               : '') + ' is ' + (installResult.clusters[0] && installResult.clusters[0].config_status === 'RUNNING'
@@ -609,6 +623,11 @@
 
                       <!-- Distributed -->
                       <div x-show="col.key === 'distributed'">
+                        <img src="/static/nsx-vpc-distributed.jpg"
+                             alt="NSX-VPC Distributed Architecture"
+                             title="Click to enlarge"
+                             @click="showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
+                             style="width:100%; max-height:80px; object-fit:cover; object-position:top; border-radius:4px; border:1px solid #dfe3e6; cursor:zoom-in; margin-bottom:0.45rem; display:block;">
                         <div class="pc-label">Pros</div>
                         <div class="pc-item">· Simple design - No Edge Node / Tier-0 / BGP</div>
                         <div class="pc-item">· Full VCF-Automation support</div>
@@ -656,7 +675,7 @@
                 { key: 'centralized', label: 'NSX-VPC Centralized', badge: 'Advanced',                  icon: 'fa-circle-nodes'  },
                 { key: 'vds_flb',     label: 'VDS',                  badge: 'No NSX',                    icon: 'fa-ethernet'      }
               ]" :key="col.key">
-                <div class="card" style="display:flex; flex-direction:column; height:100%;">
+                <div class="card" style="display:flex; flex-direction:column;">
 
                   <!-- Column header: title row + badge row -->
                   <div class="card-header" style="justify-content:space-between; align-items:flex-start;">
@@ -671,11 +690,12 @@
                     </div>
                     <span class="status-chip"
                           :class="{
-                            'ready':    overallFor(col.key) === 'ready',
-                            'warnings': overallFor(col.key) === 'warnings',
-                            'issues':   overallFor(col.key) === 'issues'
+                            'ready':        overallFor(col.key) === 'ready',
+                            'warnings':     overallFor(col.key) === 'warnings',
+                            'issues':       overallFor(col.key) === 'issues',
+                            'to_validate':  overallFor(col.key) === 'to_validate'
                           }"
-                          x-text="{ ready:'Ready', warnings:'Warnings', issues:'Issues' }[overallFor(col.key)] || ''">
+                          x-text="{ ready:'Ready', warnings:'Warnings', issues:'Issues', to_validate:'To Validate' }[overallFor(col.key)] || ''">
                     </span>
                   </div>
 
@@ -683,6 +703,11 @@
                   <div class="pros-cons-section">
                     <!-- Distributed -->
                     <div x-show="col.key === 'distributed'">
+                      <img src="/static/nsx-vpc-distributed.jpg"
+                           alt="NSX-VPC Distributed Architecture"
+                           title="Click to enlarge"
+                           @click="showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
+                           style="width:100%; max-height:80px; object-fit:cover; object-position:top; border-radius:4px; border:1px solid #dfe3e6; cursor:zoom-in; margin-bottom:0.45rem; display:block;">
                       <div class="pc-label">Pros</div>
                       <div class="pc-item">· Simple design - No Edge Node / Tier-0 / BGP</div>
                       <div class="pc-item">· Full VCF-Automation support</div>
@@ -714,8 +739,8 @@
                     </div>
                   </div>
 
-                  <!-- Check rows -->
-                  <div style="flex:1;">
+                  <!-- Steps moved to full-width panel below -->
+                  <div style="display:none;">
                     <template x-for="(check, idx) in (modes[col.key] || [])" :key="col.key + '-' + idx">
                       <div>
                         <!-- Row header (click to expand) -->
@@ -1020,37 +1045,150 @@
                   </div>
 
                   <!-- Column footer -->
-                  <div class="card-footer">
-                    <p style="font-size:0.75rem; font-weight:600; margin:0;"
-                       :class="{ 'clr-ok': overallFor(col.key)==='ready', 'clr-warn': overallFor(col.key)==='warnings', 'clr-error': overallFor(col.key)==='issues' }"
-                       x-text="{ ready:'All requirements met', warnings:'Review warnings', issues:'Requirements missing' }[overallFor(col.key)] || ''">
-                    </p>
-                    <!-- VDS/FLB: always disabled -->
-                    <template x-if="showReqBtn && col.key === 'vds_flb'">
-                      <div style="display:flex; flex-direction:column; align-items:flex-end; gap:0.2rem;">
-                        <button disabled class="btn btn-sm"
-                                style="opacity:0.45; cursor:not-allowed; background:#dfe3e6; color:#6e777b; border:none;">
+                  <div class="card-footer" style="flex-direction:column; align-items:stretch; gap:0.5rem;">
+                    <!-- Mode selector radio -->
+                    <label @click="selectedMode = col.key"
+                           :style="selectedMode === col.key
+                             ? 'display:flex; align-items:center; gap:0.45rem; cursor:pointer; background:#e8f3fb; border:1px solid #0072a3; border-radius:4px; padding:0.3rem 0.55rem;'
+                             : 'display:flex; align-items:center; gap:0.45rem; cursor:pointer; border:1px solid #dfe3e6; border-radius:4px; padding:0.3rem 0.55rem;'">
+                      <input type="radio" :value="col.key" x-model="selectedMode"
+                             style="cursor:pointer; accent-color:#0072a3; width:0.85rem; height:0.85rem; flex-shrink:0;">
+                      <span style="font-size:0.73rem; font-weight:600;"
+                            :style="selectedMode === col.key ? 'color:#004980;' : 'color:#4a5568;'"
+                            x-text="selectedMode === col.key ? 'Viewing steps ▼' : 'View steps'"></span>
+                    </label>
+                    <!-- Status + Deploy row -->
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                      <p style="font-size:0.75rem; font-weight:600; margin:0;"
+                         :class="{ 'clr-ok': overallFor(col.key)==='ready', 'clr-warn': overallFor(col.key)==='warnings', 'clr-error': overallFor(col.key)==='issues' }"
+                         :style="overallFor(col.key)==='to_validate' ? 'color:#6e777b;' : ''"
+                         x-text="{ ready:'All requirements met', warnings:'Review warnings', issues:'Requirements missing', to_validate:'To Validate' }[overallFor(col.key)] || ''">
+                      </p>
+                      <!-- VDS/FLB: always disabled -->
+                      <template x-if="showReqBtn && col.key === 'vds_flb'">
+                        <div style="display:flex; flex-direction:column; align-items:flex-end; gap:0.2rem;">
+                          <button disabled class="btn btn-sm"
+                                  style="opacity:0.45; cursor:not-allowed; background:#dfe3e6; color:#6e777b; border:none;">
+                            <i class="fas fa-rocket" style="font-size:0.68rem;"></i> Deploy
+                          </button>
+                          <span style="font-size:0.62rem; color:#6e777b;">Not supported by this tool</span>
+                        </div>
+                      </template>
+                      <!-- NSX modes: active / greyed -->
+                      <template x-if="showReqBtn && col.key !== 'vds_flb'">
+                        <button
+                          :disabled="overallFor(col.key) === 'issues'"
+                          @click="overallFor(col.key) !== 'issues' && startInstallWizard(col.key)"
+                          class="btn btn-sm"
+                          :class="overallFor(col.key) === 'issues' ? '' : 'btn-primary'"
+                          :style="overallFor(col.key) === 'issues' ? 'opacity:0.45; cursor:not-allowed; background:#dfe3e6; color:#6e777b; border:none;' : ''">
                           <i class="fas fa-rocket" style="font-size:0.68rem;"></i> Deploy
                         </button>
-                        <span style="font-size:0.62rem; color:#6e777b;">Not supported by this tool</span>
-                      </div>
-                    </template>
-                    <!-- NSX modes: active / greyed -->
-                    <template x-if="showReqBtn && col.key !== 'vds_flb'">
-                      <button
-                        :disabled="overallFor(col.key) === 'issues'"
-                        @click="overallFor(col.key) !== 'issues' && startInstallWizard(col.key)"
-                        class="btn btn-sm"
-                        :class="overallFor(col.key) === 'issues' ? '' : 'btn-primary'"
-                        :style="overallFor(col.key) === 'issues' ? 'opacity:0.45; cursor:not-allowed; background:#dfe3e6; color:#6e777b; border:none;' : ''">
-                        <i class="fas fa-rocket" style="font-size:0.68rem;"></i> Deploy
-                      </button>
-                    </template>
+                      </template>
+                    </div>
                   </div>
 
                 </div><!-- /card -->
               </template>
             </div><!-- /req-cols -->
+
+            <!-- ── Full-width Steps Panel ──────────────────────── -->
+            <div x-show="selectedMode" x-cloak style="margin-top:1.5rem;">
+              <template x-for="col in [
+                { key: 'distributed', label: 'NSX-VPC Distributed', badge: 'Simple \u00b7 Recommended', icon: 'fa-network-wired' },
+                { key: 'centralized', label: 'NSX-VPC Centralized', badge: 'Advanced',                  icon: 'fa-circle-nodes'  },
+                { key: 'vds_flb',     label: 'VDS',                  badge: 'No NSX',                    icon: 'fa-ethernet'      }
+              ]" :key="'fp-' + col.key">
+                <div x-show="selectedMode === col.key" class="card fade-in"
+                     style="border-top:3px solid #0072a3;">
+
+                  <!-- Panel header -->
+                  <div class="card-header" style="justify-content:space-between; align-items:center; background:#f3f6fa;">
+                    <div style="display:flex; align-items:center; gap:0.5rem;">
+                      <i :class="'fas ' + col.icon" style="color:#0072a3; font-size:0.75rem;"></i>
+                      <span style="font-size:0.78rem; font-weight:700; text-transform:uppercase; letter-spacing:.03em;" x-text="col.label"></span>
+                      <span class="label" style="font-size:0.58rem; padding:0.1rem 0.35rem;" x-text="col.badge"></span>
+                    </div>
+                    <span class="status-chip"
+                          :class="{ ready: overallFor(col.key)==='ready', warnings: overallFor(col.key)==='warnings', issues: overallFor(col.key)==='issues', to_validate: overallFor(col.key)==='to_validate' }"
+                          x-text="{ ready:'Ready', warnings:'Warnings', issues:'Issues', to_validate:'To Validate' }[overallFor(col.key)] || ''">
+                    </span>
+                  </div>
+
+                  <!-- Step rows (same template as columns) -->
+                  <div style="padding:0.25rem 0;">
+                    <template x-for="(check, idx) in (modes[col.key] || [])" :key="'fp-' + col.key + '-' + idx">
+                      <div>
+                        <div @click="check.details && (check.expanded = !check.expanded)"
+                             class="step-row"
+                             :class="check.details ? 'clickable' : 'no-click'">
+                          <span style="flex-shrink:0; width:1rem; text-align:center; margin-top:0.1rem;">
+                            <i class="fas fa-check-circle clr-ok"           style="font-size:0.75rem;" x-show="check.status==='ok'"></i>
+                            <i class="fas fa-triangle-exclamation clr-warn" style="font-size:0.75rem;" x-show="check.status==='warning'"></i>
+                            <i class="fas fa-circle-xmark clr-error"        style="font-size:0.75rem;" x-show="check.status==='error'"></i>
+                            <i class="fas fa-circle-minus clr-info"         style="font-size:0.75rem;" x-show="check.status==='info'"></i>
+                          </span>
+
+                          <div style="flex:1; min-width:0;">
+                            <!-- Title row -->
+                            <div style="display:flex; align-items:center; gap:0.35rem; flex-wrap:wrap;">
+                              <span class="step-badge" x-text="check.step === 'Auth' ? 'Auth' : 'S' + check.step"></span>
+                              <p style="font-weight:700; font-size:0.85rem; color:#2b2b2b; line-height:1.3; margin:0;" x-text="check.name"></p>
+                            </div>
+                            <!-- Check MTU button -->
+                            <div x-show="check.step === '3' && col.key !== 'vds_flb'" style="display:flex; margin-top:0.25rem;">
+                              <button @click.stop="mtuModal.show = true; mtuModal.done = false; mtuModal.tests = []; mtuModal.error = null; mtuModal.summary = ''; mtuModal.colKey = col.key; fetchMtuHosts()"
+                                      class="fix-badge"
+                                      :style="{ color:'#fff',
+                                        background: mtuResult[col.key]==='pass' ? '#48960c' : mtuResult[col.key]==='fail' ? '#c92100' : '#89a0a8',
+                                        borderColor: mtuResult[col.key]==='pass' ? '#48960c' : mtuResult[col.key]==='fail' ? '#c92100' : '#89a0a8' }">
+                                <i :class="mtuResult[col.key]==='pass' ? 'fas fa-check-circle' : mtuResult[col.key]==='fail' ? 'fas fa-times-circle' : 'fas fa-network-wired'"
+                                   style="margin-right:0.25rem;"></i>Check MTU
+                              </button>
+                            </div>
+                            <!-- Check VLAN button -->
+                            <template x-if="check.step === '5-1' && col.key === 'distributed' && ['5-1','5-2','5-3','5-4'].every(s => (modes['distributed']||[]).find(c => c.step === s)?.status === 'ok')">
+                              <div style="display:flex; margin-top:0.25rem;">
+                                <button @click.stop="openVlanModal()"
+                                        class="fix-badge"
+                                        :style="{ color:'#fff',
+                                          background: vlanResult==='pass' ? '#48960c' : vlanResult==='fail' ? '#c92100' : '#89a0a8',
+                                          borderColor: vlanResult==='pass' ? '#48960c' : vlanResult==='fail' ? '#c92100' : '#89a0a8' }">
+                                  <i :class="vlanResult==='pass' ? 'fas fa-check-circle' : vlanResult==='fail' ? 'fas fa-times-circle' : 'fas fa-sitemap'"
+                                     style="margin-right:0.25rem;"></i>Check VLAN
+                                </button>
+                              </div>
+                            </template>
+                            <!-- Subtitle -->
+                            <p style="font-size:0.76rem; color:#6e777b; margin:0.15rem 0 0; line-height:1.4;" x-text="check.message"></p>
+                          </div>
+
+                          <!-- Fix button -->
+                          <button x-show="check.can_fix && check.status === 'error'"
+                                  @click.stop="check.expanded = true; $dispatch('fix-step', {step: check.step, mode: col.key})"
+                                  class="fix-badge">Fix</button>
+
+                          <!-- Chevron -->
+                          <span x-show="check.details" class="chevron" :class="check.expanded ? 'open' : ''">
+                            <i class="fas fa-chevron-down"></i>
+                          </span>
+                        </div>
+
+                        <!-- Expanded detail — mirrors the hidden-column structure exactly -->
+                        <div x-show="check.expanded && check.details" x-transition.opacity
+                             class="step-details"
+                             :style="{ background: check.status==='ok' ? '#f3fbf0' : check.status==='warning' ? '#fdf7f0' : check.status==='error' ? '#fdf0f0' : '#f3f6fa', 'border-top-color': check.status==='ok' ? '#c6e8ae' : check.status==='warning' ? '#f5d898' : check.status==='error' ? '#f5c2c2' : '#dfe3e6' }">
+                          <pre style="white-space:pre-wrap; overflow-x:auto; font-size:0.72rem; color:#4a5568; margin:0;" x-text="check.details"></pre>
+                          <template x-if="check.step === '2'"><div style="margin-top:0.55rem; display:flex; flex-direction:column; gap:0.3rem;"><button class="btn btn-sm btn-link" style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;" @click.stop="fetch('/api/vc-cluster-page-url',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vc_url:form.vc_url,username:form.username,password:form.password,page:'drs'})}).then(r=>r.json()).then(d=>{let us=d.urls||[];if(!us.length){window.open(d.fallback||('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/'),'_blank');return;}us.forEach((u,i)=>setTimeout(()=>window.open(u.url,'_blank'),i*150));}).catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))"><i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(DRS)</span></button><button class="btn btn-sm btn-link" style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;" @click.stop="fetch('/api/vc-cluster-page-url',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vc_url:form.vc_url,username:form.username,password:form.password,page:'ha'})}).then(r=>r.json()).then(d=>{let us=d.urls||[];if(!us.length){window.open(d.fallback||('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/'),'_blank');return;}us.forEach((u,i)=>setTimeout(()=>window.open(u.url,'_blank'),i*150));}).catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))"><i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(HA)</span></button></div></template><template x-if="check.step === '3' && col.key !== 'vds_flb'"><div style="margin-top:0.55rem;"><button class="btn btn-sm btn-link" style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3;" @click.stop="fetch('/api/vc-network-config-url',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vc_url:form.vc_url,username:form.username,password:form.password})}).then(r=>r.json()).then(d=>{let us=d.urls||[];if(!us.length){window.open(d.fallback||('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/'),'_blank');return;}us.forEach((u,i)=>setTimeout(()=>window.open(u.url,'_blank'),i*150));}).catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))"><i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(NSX Host Prep)</span></button></div></template><template x-if="check.step === '4' && col.key === 'distributed'"><div style="margin-top:0.55rem;"><button class="btn btn-sm btn-link" style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3;" @click.stop="fetch('/api/vc-vcenter-folder-plugin-url',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vc_url:form.vc_url,username:form.username,password:form.password,nav_key:'plugin.network.connectivity.vna.clusters'})}).then(r=>r.json()).then(d=>window.open(d.url||d.fallback,'_blank')).catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))"><i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(VNA Cluster)</span></button></div></template><template x-if="check.step === '4' && col.key === 'centralized'"><div style="margin-top:0.55rem; display:flex; flex-direction:column; gap:0.3rem;"><button class="btn btn-sm btn-link" style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;" @click.stop="fetch('/api/vc-vcenter-folder-plugin-url',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vc_url:form.vc_url,username:form.username,password:form.password,nav_key:'plugin.network.connectivity.edge.clusters'})}).then(r=>r.json()).then(d=>window.open(d.url||d.fallback,'_blank')).catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))"><i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(Edge Cluster)</span></button><button class="btn btn-sm btn-link" style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;" @click.stop="let h=form.nsx_url.replace(/^https?:\/\//,'').replace(/\/+$/,''); window.open('https://'+h+'/nsx/#/app/networks/providers/home/providers','_blank')"><i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in NSX <span style="opacity:0.7;">(Tier-0)</span></button></div></template><template x-if="check.step === '5-1' && col.key !== 'vds_flb'"><div style="margin-top:0.55rem;"><button class="btn btn-sm btn-link" style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;" @click.stop="fetch('/api/vc-vcenter-folder-plugin-url',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vc_url:form.vc_url,username:form.username,password:form.password,plugin:'vpc',nav_key:'plugin.vc.external.connection'})}).then(r=>r.json()).then(d=>window.open(d.url||d.fallback,'_blank')).catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))"><i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(Ext. Conn.)</span></button></div></template><template x-if="check.step === '5-2' && col.key !== 'vds_flb'"><div style="margin-top:0.55rem;"><button class="btn btn-sm btn-link" style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;" @click.stop="fetch('/api/vc-tgw-url',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vc_url:form.vc_url,username:form.username,password:form.password,tgw_name:check.tgw_name||''})}).then(r=>r.json()).then(d=>window.open(d.url||d.fallback,'_blank')).catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))"><i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(Trans. GW)</span></button></div></template><template x-if="check.step === '5-3' && col.key !== 'vds_flb'"><div style="margin-top:0.55rem;"><button class="btn btn-sm btn-link" style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;" @click.stop="fetch('/api/vc-vpc-ipblocks-url',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vc_url:form.vc_url,username:form.username,password:form.password})}).then(r=>r.json()).then(d=>window.open(d.url||d.fallback,'_blank')).catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))"><i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(Ext. IP Block)</span></button></div></template><template x-if="check.step === '5-4' && col.key !== 'vds_flb'"><div style="margin-top:0.55rem;"><button class="btn btn-sm btn-link" style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;" @click.stop="fetch('/api/vc-vpc-ipblocks-url',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vc_url:form.vc_url,username:form.username,password:form.password,nav_key:'plugin.vpc.aggregated.connectivity.profile'})}).then(r=>r.json()).then(d=>window.open(d.url||d.fallback,'_blank')).catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))"><i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(VPC Conn. Prof.)</span></button></div></template>
+                        </div>
+                      </div>
+                    </template>
+                  </div><!-- /step rows -->
+
+                </div><!-- /full-width card -->
+              </template>
+            </div><!-- /full-width steps panel -->
+
           </div><!-- /requirements results -->
 
           <!-- ── Deploy Wizard ──────────────────────────────────── -->
@@ -1802,6 +1940,7 @@
   <!-- ═══════════════════════════════════════════════════════════
        Fix Modal (S4–S7, both modes)
        ═══════════════════════════════════════════════════════════ -->
+
   <div x-show="fixModal.show" x-cloak
        x-transition:enter="transition ease-out duration-200"
        x-transition:enter-start="opacity-0"
@@ -1811,7 +1950,7 @@
        x-transition:leave-end="opacity-0"
        class="modal" aria-hidden="false">
     <div class="modal-dialog" role="dialog" aria-modal="true"
-         style="max-width:560px; width:100%; display:flex; flex-direction:column; max-height:92vh;">
+         style="max-width:780px; width:100%; display:flex; flex-direction:column; max-height:92vh;">
       <div class="modal-content" style="display:flex; flex-direction:column; max-height:92vh;">
 
         <div class="modal-header" style="flex-shrink:0;">
@@ -1887,12 +2026,27 @@
                 <template x-if="fixModal.cascade.enabled">
                   <ul style="margin:0; padding-left:1.1rem; font-size:0.7rem; color:#004980; line-height:1.8;">
                     <li>S5-2 &nbsp;— Attach Distributed Transit Gateway to this connection</li>
-                    <li>S5-3 &nbsp;— Create External IP Block <code>dist-ext-ip-block-1</code> (CIDR derived from gateway subnet)</li>
+                    <li>
+                      S5-3 &nbsp;— Create External IP Block <code>dist-ext-ip-block-1</code> (CIDR derived from gateway subnet)
+                      <div style="margin-top:0.35rem; margin-left:1rem; padding-left:0.6rem; border-left:2px solid #b3d4f0;">
+                        <label style="font-size:0.67rem; color:#004980; font-weight:600;">Excluded IP Ranges <span style="font-weight:normal; color:#5a6a7a;">(optional)</span></label>
+                        <div class="clr-control-container" style="margin-top:0.15rem;"><div class="clr-input-wrapper">
+                          <input x-model="fixModal.form.excl_ranges"
+                                 placeholder="e.g. 10.1.100.254, 10.1.100.1-10.1.100.3"
+                                 class="clr-input" style="font-size:0.68rem; width:100%;">
+                        </div></div>
+                        <p style="font-size:0.62rem; color:#6e777b; margin-top:0.15rem;">Ranges to exclude from Supervisor allocation (e.g. gateway VRRP or physical servers on that VLAN).</p>
+                        <p x-show="fixModal.form.excl_ranges && fixModal.form.gateway_cidr && !exclRangesInSubnet(fixModal.form.excl_ranges, fixModal.form.gateway_cidr)"
+                           style="font-size:0.62rem; color:#c92100; margin-top:0.1rem;">
+                          ⚠ One or more ranges fall outside the gateway subnet.
+                        </p>
+                      </div>
+                    </li>
                     <li>
                       S5-4 &nbsp;— Configure VPC Connectivity Profile
                       <!-- VNA Cluster selector: only shown when there are 2+ clusters -->
                       <template x-if="fixModal.form.vna_clusters && fixModal.form.vna_clusters.length > 1">
-                        <div style="margin-top:0.35rem; margin-left:0.1rem;">
+                        <div style="margin-top:0.35rem; margin-left:1rem; padding-left:0.6rem; border-left:2px solid #b3d4f0;">
                           <label style="font-size:0.68rem; color:#004980; font-weight:600;">VNA Cluster:</label>
                           <div class="clr-select-wrapper" style="margin-top:0.15rem;">
                             <select x-model="fixModal.form.vna_cluster_path" class="clr-select" style="font-size:0.7rem;">
@@ -2154,7 +2308,11 @@
                          placeholder="e.g. 10.1.7.128-10.1.7.130, 10.1.7.254"
                          class="clr-input">
                 </div></div>
-                <p style="font-size:0.62rem; color:#6e777b; margin-top:0.2rem;">Enter range(s) to exclude (e.g. gateway VRRP or physical servers on that VLAN).</p>
+                <p style="font-size:0.62rem; color:#6e777b; margin-top:0.2rem;">Ranges to exclude from Supervisor allocation (e.g. gateway VRRP or physical servers on that VLAN).</p>
+                <p x-show="fixModal.form.excluded_ranges && fixModal.form.cidr && !exclRangesInSubnet(fixModal.form.excluded_ranges, fixModal.form.cidr)"
+                   style="font-size:0.62rem; color:#c92100; margin-top:0.1rem;">
+                  ⚠ One or more ranges fall outside the IP block CIDR.
+                </p>
               </div>
             </div>
           </template>
@@ -2812,7 +2970,7 @@
        x-transition:leave-end="opacity-0"
        class="modal" aria-hidden="false">
     <div class="modal-dialog" role="dialog" aria-modal="true"
-         style="max-width:780px; width:100%; display:flex; flex-direction:column;">
+         style="max-width:920px; width:100%; display:flex; flex-direction:column;">
       <div class="modal-content" style="display:flex; flex-direction:column;">
 
         <div class="modal-header">
@@ -2900,9 +3058,7 @@
               <span style="display:inline-block; width:2.5rem; height:2.5rem;
                             border:3px solid #dfe3e6; border-top-color:#0072a3;
                             border-radius:50%; animation:clr-spin .8s linear infinite;"></span>
-              <p style="margin-top:0.8rem; font-size:0.85rem;">
-                Running VLAN connectivity test on all ESX hosts…
-              </p>
+              <p style="margin-top:0.8rem; font-size:0.85rem;">Running VLAN connectivity test on all ESX hosts… (may take a couple of minutes)</p>
             </div>
           </template>
 
@@ -2944,25 +3100,76 @@
                             <span style="color:#7a4000; white-space:pre-line;" x-text="msg"></span>
                           </div>
                         </template>
-                        <!-- Fix button: opens vCenter VPC > IP Blocks directly -->
-                        <div style="margin-top:0.6rem; display:flex; align-items:center; gap:0.5rem;">
-                          <button class="btn btn-warning btn-sm"
-                                  style="font-size:0.75rem; padding:0.2rem 0.55rem;"
-                                  @click.stop="
-                                    fetch('/api/vc-vpc-ipblocks-url', {
-                                      method: 'POST',
-                                      headers: {'Content-Type':'application/json'},
-                                      body: JSON.stringify({vc_url: form.vc_url, username: form.username, password: form.password})
-                                    })
-                                    .then(r => r.json())
-                                    .then(d => window.open(d.url, '_blank'))
-                                    .catch(() => window.open('https://' + form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'') + '/ui/', '_blank'))
-                                  ">
-                            <i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Fix in vCenter
-                          </button>
-                          <span style="color:#7a6000; font-size:0.72rem;">
-                            vCenter → Virtual Private Clouds → Configure → IP Blocks
-                          </span>
+                        <!-- Fix buttons -->
+                        <div style="margin-top:0.65rem; display:flex; flex-direction:column; gap:0.5rem;">
+                          <!-- Auto-fix row -->
+                          <div style="display:flex; align-items:center; gap:0.65rem; flex-wrap:wrap;">
+                            <template x-if="!vlanModal.autoFixDone">
+                              <button class="btn btn-danger btn-sm"
+                                      style="font-size:0.75rem; padding:0.2rem 0.7rem; white-space:nowrap; flex-shrink:0;"
+                                      :disabled="vlanModal.autoFixLoading"
+                                      @click.stop="
+                                        vlanModal.autoFixLoading = true; vlanModal.autoFixError = null;
+                                        fetch('/api/fix/add-ip-block-exclusion', {
+                                          method: 'POST',
+                                          headers: {'Content-Type':'application/json'},
+                                          body: JSON.stringify({
+                                            nsx_url: form.nsx_url, nsx_user: form.nsx_user, nsx_pass: form.nsx_pass,
+                                            ip_block_path: vlanModal.ip_block_path,
+                                            ips: vlanModal.conflict_ips
+                                          })
+                                        })
+                                        .then(r => r.json())
+                                        .then(d => {
+                                          vlanModal.autoFixLoading = false;
+                                          if (d.success) { vlanModal.autoFixDone = true; }
+                                          else { vlanModal.autoFixError = d.error || 'Unknown error'; }
+                                        })
+                                        .catch(e => { vlanModal.autoFixLoading = false; vlanModal.autoFixError = String(e); })
+                                      ">
+                                <template x-if="vlanModal.autoFixLoading">
+                                  <i class="fas fa-circle-notch fa-spin" style="margin-right:0.3rem;"></i>
+                                </template>
+                                <template x-if="!vlanModal.autoFixLoading">
+                                  <i class="fas fa-wrench" style="margin-right:0.3rem;"></i>
+                                </template>
+                                Fix Automatically
+                              </button>
+                            </template>
+                            <template x-if="vlanModal.autoFixDone">
+                              <span style="color:#1a7a1a; font-size:0.8rem; font-weight:600;">
+                                <i class="fas fa-check-circle" style="margin-right:0.3rem;"></i>
+                                IPs added to Excluded Ranges of <strong x-text="vlanModal.ip_block_name"></strong>. Run Again to re-validate.
+                              </span>
+                            </template>
+                            <template x-if="!vlanModal.autoFixDone">
+                              <span style="color:#7a4000; font-size:0.75rem;"
+                                    x-text="'Add to Exclusions of ' + (vlanModal.ip_block_name || 'IP Block')"></span>
+                            </template>
+                            <template x-if="vlanModal.autoFixError">
+                              <span style="color:#c00; font-size:0.75rem;" x-text="'Error: ' + vlanModal.autoFixError"></span>
+                            </template>
+                          </div>
+                          <!-- Manual fix row -->
+                          <div style="display:flex; align-items:center; gap:0.65rem;">
+                            <button class="btn btn-danger btn-sm"
+                                    style="font-size:0.75rem; padding:0.2rem 0.7rem; white-space:nowrap; flex-shrink:0;"
+                                    @click.stop="
+                                      fetch('/api/vc-vpc-ipblocks-url', {
+                                        method: 'POST',
+                                        headers: {'Content-Type':'application/json'},
+                                        body: JSON.stringify({vc_url: form.vc_url, username: form.username, password: form.password})
+                                      })
+                                      .then(r => r.json())
+                                      .then(d => window.open(d.url, '_blank'))
+                                      .catch(() => window.open('https://' + form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'') + '/ui/', '_blank'))
+                                    ">
+                              <i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Fix Manually
+                            </button>
+                            <span style="color:#7a4000; font-size:0.75rem; white-space:nowrap;">
+                              vCenter → Virtual Private Clouds → Configure → IP Blocks
+                            </span>
+                          </div>
                         </div>
                       </div>
                     </template>
@@ -3068,6 +3275,7 @@
       showReqBtn:     false,
       showModeInfo:   true,
       modes: { distributed: [], centralized: [], vds_flb: [] },
+      selectedMode:   null,
 
       // ── HA / DRS Fix ──────────────────────────────────────────────────────
       haDrsModal: {
@@ -3094,9 +3302,14 @@
         hosts: [],          // [{name, short, healthy, password}] — one per prepared ESX
         hostsLoading: false,
         tests: [], error: null, summary: '',
-        vlanId: ''          // filled from modes.distributed S5-1 details when modal opens
+        vlanId: '',         // filled from modes.distributed S5-1 details when modal opens
+        ip_block_name: '', ip_block_path: '', conflict_ips: [],
+        autoFixLoading: false, autoFixDone: false, autoFixError: null
       },
       vlanResult: null,   // null | 'pass' | 'fail'
+
+      showDiagram: false, // lightbox for architecture diagram
+      diagDrag: { active: false, offsetX: 0, offsetY: 0, x: null, y: null },
 
       // ── Install Wizard ─────────────────────────────────────────────────
       showInstallWizard: false,
@@ -3150,6 +3363,7 @@
         if (!checks.length) return 'unknown';
         if (checks.some(r => r.status === 'error'))   return 'issues';
         if (checks.some(r => r.status === 'warning')) return 'warnings';
+        if (checks.some(r => r.status === 'info'))    return 'to_validate';
         return 'ready';
       },
 
@@ -3157,6 +3371,7 @@
         this.installResult = null;
         this.showReqBtn    = false;
         this.modes         = { distributed: [], centralized: [], vds_flb: [] };
+        this.selectedMode  = null;
         this.showInstallWizard = false;
         this.wizardStep    = 0;
         document.querySelectorAll('.req-cols .card-header, .req-cols .pros-cons-section')
@@ -3233,6 +3448,7 @@
             centralized:  process((d.modes || {}).centralized),
             vds_flb:      process((d.modes || {}).vds_flb),
           };
+          // No auto-selection: user must click "View steps" to reveal the panel
         } catch (e) {
           const err = [{ step:'?', name:'Request Error', status:'error',
                          message: String(e), details:'', expanded: true }];
@@ -3532,6 +3748,28 @@
         } catch { return gatewayAddr; }
       },
 
+      exclRangesInSubnet(ranges, gatewayCidr) {
+        if (!ranges || !gatewayCidr) return true;
+        try {
+          const [gwIp, prefix] = gatewayCidr.split('/');
+          const prefLen = parseInt(prefix, 10);
+          const ipToInt = ip => ip.split('.').reduce((acc, o) => ((acc << 8) + parseInt(o, 10)) >>> 0, 0);
+          const mask = prefLen === 0 ? 0 : (0xFFFFFFFF << (32 - prefLen)) >>> 0;
+          const net  = (ipToInt(gwIp) & mask) >>> 0;
+          for (const tok of ranges.split(',')) {
+            const t = tok.trim();
+            if (!t) continue;
+            if (t.includes('-')) {
+              const [a, b] = t.split('-').map(x => x.trim());
+              if ((ipToInt(a) & mask) >>> 0 !== net || (ipToInt(b) & mask) >>> 0 !== net) return false;
+            } else {
+              if ((ipToInt(t) & mask) >>> 0 !== net) return false;
+            }
+          }
+          return true;
+        } catch(e) { return false; }
+      },
+
       async openFixModal(step, mode) {
         const mShort = mode === 'distributed' ? 'd' : 'c';
         const type   = `s${step}${mShort}`;
@@ -3792,7 +4030,7 @@
         // ── Cascade: after S5-1d success, auto-run S5-2 → S5-3 → S5-4 ──
         if (this.fixModal.type === 's5-1d' && this.fixModal.result && this.fixModal.result.success) {
           if (this.fixModal.cascade && this.fixModal.cascade.enabled) {
-            await this.runCascade(f.name, f.gateway_cidr, base, f.vna_cluster_path || '');
+            await this.runCascade(f.name, f.gateway_cidr, base, f.vna_cluster_path || '', f.excl_ranges || '');
           } else {
             // Cascade disabled — mark done so Re-check button appears
             if (this.fixModal.cascade) this.fixModal.cascade.done = true;
@@ -3803,7 +4041,7 @@
         }
       },
 
-      async runCascade(dvlanName, gatewayCidr, base, selectedVnaPath) {
+      async runCascade(dvlanName, gatewayCidr, base, selectedVnaPath, exclRanges) {
         const cascade = this.fixModal.cascade;
         if (!cascade || !cascade.enabled) return;
         cascade.running = true;
@@ -3848,7 +4086,7 @@
         let ipBlockPath = null;
         try {
           const r3 = await fetch('/api/fix/create-ip-block', {method:'POST', headers:hdr,
-            body: JSON.stringify({...base, name: 'dist-ext-ip-block-1', cidr: networkCidr, excluded_ranges: ''})});
+            body: JSON.stringify({...base, name: 'dist-ext-ip-block-1', cidr: networkCidr, excluded_ranges: exclRanges || ''})});
           const d3 = await r3.json();
           cascade.steps[1].status = d3.success ? 'success' : 'fail';
           cascade.steps[1].error  = d3.error  || null;
@@ -4048,9 +4286,13 @@
             })
           });
           const d = await r.json();
-          m.tests   = d.tests   || [];
-          m.error   = d.error   || null;
-          m.summary = d.summary || '';
+          m.tests         = d.tests         || [];
+          m.error         = d.error         || null;
+          m.summary       = d.summary       || '';
+          m.ip_block_name = d.ip_block_name || '';
+          m.ip_block_path = d.ip_block_path || '';
+          m.conflict_ips  = d.conflict_ips  || [];
+          m.autoFixLoading = false; m.autoFixDone = false; m.autoFixError = null;
           this.vlanResult = (m.error || m.tests.some(t => t.result !== 'pass') || m.tests.some(t => t.conflict))
             ? 'fail' : 'pass';
         } catch(e) {
@@ -4258,6 +4500,41 @@
     }
   }
   </script>
+
+  <!-- ═══ Architecture diagram floating panel ════════════════════════════ -->
+  <div x-show="showDiagram" x-cloak
+       class="diagram-lightbox"
+       :style="diagDrag.x !== null
+         ? 'top:'+diagDrag.y+'px !important; right:auto !important; left:'+diagDrag.x+'px !important; transform:none !important;'
+         : ''"
+       @mousemove.window="if (diagDrag.active) { diagDrag.x = $event.clientX - diagDrag.offsetX; diagDrag.y = $event.clientY - diagDrag.offsetY; }"
+       @mouseup.window="diagDrag.active = false"
+       @keydown.escape.window="showDiagram = false; diagDrag.x = null; diagDrag.y = null;">
+    <div style="position:relative; user-select:none;">
+      <!-- Drag handle bar -->
+      <div @mousedown="
+               diagDrag.active = true;
+               const r = $el.parentElement.getBoundingClientRect();
+               diagDrag.offsetX = $event.clientX - r.left;
+               diagDrag.offsetY = $event.clientY - r.top;
+               $event.preventDefault();"
+           :style="diagDrag.active ? 'cursor:grabbing' : 'cursor:grab'"
+           style="background:rgba(0,0,0,0.55); border-radius:6px 6px 0 0;
+                  padding:4px 10px; display:flex; align-items:center; justify-content:space-between;
+                  font-size:0.72rem; color:#fff; letter-spacing:0.03em; select:none;">
+        <span style="opacity:0.8;">⠿ drag to move</span>
+        <button @click.stop="showDiagram = false; diagDrag.x = null; diagDrag.y = null;"
+                style="background:none; border:none; color:#fff; cursor:pointer;
+                       font-size:1rem; font-weight:700; line-height:1; padding:0 2px;
+                       opacity:0.85;" aria-label="Close">×</button>
+      </div>
+      <img src="/static/nsx-vpc-distributed.jpg"
+           alt="NSX-VPC Distributed Architecture"
+           style="max-width:56vw; max-height:84vh; border-radius:0 0 6px 6px;
+                  box-shadow:0 12px 48px rgba(0,0,0,0.55); display:block;
+                  border:2px solid rgba(255,255,255,0.15); border-top:none;">
+    </div>
+  </div>
 
 </body>
 </html>
