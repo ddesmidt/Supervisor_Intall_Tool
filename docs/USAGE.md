@@ -54,26 +54,34 @@ Click **"Check if Supervisor is Installed"**.
 
 Click **"Check Supervisor Requirements"**.
 
-The tool queries vCenter and NSX and displays a **3-column matrix**, one column per deployment mode:
+The tool queries vCenter and NSX and displays a **3-column summary** (one card per deployment mode), then a **full-width step panel** for whichever mode you select.
 
-| Column | Mode |
-|---|---|
-| 1 | **NSX-VPC Distributed** ⭐ (Recommended) |
-| 2 | **NSX-VPC Centralized** |
-| 3 | **VDS / FLB** |
+### The three column cards
 
-Each column shows:
+| Column | Mode | Status chip |
+|---|---|---|
+| 1 | **NSX-VPC Distributed** ⭐ (Recommended) | Ready / Warnings / Issues |
+| 2 | **NSX-VPC Centralized** | Ready / Warnings / Issues |
+| 3 | **VDS / FLB** | To Validate |
 
-- A **Pros / Cons / Requirements** summary at the top
-- **9 requirement steps** (S1–S5-4), each with a status badge:
-  - ✅ **Green** — requirement met
-  - ⚠️ **Amber** — warning (not blocking, but worth noting)
-  - ❌ **Red** — requirement not met
-- A **Deploy** button at the bottom (enabled only when all steps are green)
+Each card shows:
+- An architecture **thumbnail** (Distributed column) — click it to open a draggable full-size diagram overlay
+- **Pros / Cons / Requirements** text
+- A **status chip** summarising the overall result
+- A **"View steps"** radio button in the footer — click it to expand the full-width steps panel for that mode
+- A **Deploy** button (enabled only when all steps are green)
+
+### The full-width steps panel
+
+Clicking **"View steps"** on a card shows all requirement steps for that mode in a full-width panel below the cards. Only one mode's steps are visible at a time. Each step shows:
+- A status icon: ✅ green / ⚠️ amber / ❌ red / ℹ️ info
+- The step name and a one-line summary message
+- Action buttons where applicable (Fix, Check MTU, Check VLAN, Open in vCenter)
+- An expandable detail section (click the row) with full check output
 
 ### Expanding a Step
 
-Click any step row to expand it and see details — e.g. which VNA cluster was found, which IP blocks exist, what is missing.
+Click any step row in the panel to expand it and see details — e.g. which VNA cluster was found, which IP blocks exist, what is missing.
 
 ### Fix Buttons
 
@@ -112,18 +120,20 @@ If any tunnel shows as failed, the physical switch ports or vDS uplinks MTU need
 
 ### Check VLAN Button
 
-Once **S5-1 through S5-4 are all green**, a **"Check VLAN"** button appears on S5-1 in the Distributed column. Use it to verify that the DVLAN VLAN ID is correctly configured end-to-end on every ESX host before deploying Supervisor.
+Once **S5-1 through S5-4 are all green**, a **"Check VLAN"** button appears on S5-1 in the Distributed steps panel. Use it to verify that the DVLAN VLAN ID is correctly configured end-to-end on every ESX host before deploying Supervisor.
 
 Clicking it opens a wizard that:
 1. Shows all ESX hosts; prompts for the root password (entering the first password copies it to all hosts)
 2. Creates a **temporary DVPortGroup** on the VDS with the connection's VLAN ID
-3. Adds a **temporary VMkernel NIC** to each host using an auto-picked IP from the connection subnet
-4. **Scans all IPs in the External IP Block** (excluding the gateway and already-excluded ranges) in parallel using `vmkping`, to detect any IPs that are already in use in the VLAN. Any responding IP is flagged as a conflict — it must be added to the "Excluded IP Ranges" of the IP Block so that Supervisor does not assign it to workloads.
+3. Adds a **temporary VMkernel NIC** to host 0 only; then scans all IPs in the External IP Block (see below) before adding the remaining hosts
+4. Adds VMkernel NICs to all remaining hosts (using re-picked IPs if conflicts were found)
 5. Pings the **VLAN gateway** from each VMkernel NIC
-6. Shows a per-host **pass / fail** result; conflicts are shown in a yellow warning box with a **"Fix in vCenter"** button that opens VPC > Configure > IP Blocks directly
+6. Shows a per-host **pass / fail** result; conflicts shown in a yellow box with two fix options:
+   - **Fix Automatically** — adds the conflicting IPs to the IP Block's Excluded Ranges via the NSX API immediately
+   - **Fix Manually** — opens vCenter → VPC → Configure → IP Blocks in a new tab
 7. Removes all temporary VMkernel NICs and the temporary DVPortGroup automatically
 
-The button turns green (all hosts pass, no conflicts) or red (any host fails or conflicts detected). This confirms that physical switch VLAN tagging is correct and the IP Block exclusions are complete before deploying Supervisor.
+The button turns green only when all hosts pass the gateway ping **and** no IP conflicts were detected.
 
 ---
 

@@ -13,8 +13,9 @@ The tool runs the same set of checks against three deployment modes in parallel.
 | ✅ Green | Requirement fully met |
 | ⚠️ Amber (Warning) | Partially met or not yet configured — not a hard blocker in all cases |
 | ❌ Red | Requirement not met — must be fixed before deploying |
+| ℹ️ Info / To Validate | Informational — manual validation required (used for VDS/FLB) |
 
-**Step order (all three columns):**
+**Step order (NSX modes):**
 
 | Step | Name | All modes |
 |---|---|---|
@@ -27,6 +28,12 @@ The tool runs the same set of checks against three deployment modes in parallel.
 | S5-2 | Transit Gateway | NSX only |
 | S5-3 | External IP Block | NSX only |
 | S5-4 | VPC Connectivity Profile | NSX only |
+
+**VDS/FLB mode** shows Auth, S1, S2, and a single informational step:
+
+| Step | Name |
+|---|---|
+| S3 | VLANs/Subnets for Supervisor and FLB |
 
 ---
 
@@ -200,15 +207,16 @@ The check runs in three phases:
 - SSH to host 0, then scan **every IP in the External IP Block** (excluding: gateway, already-excluded ranges, and host 0's own temp IP) using `vmkping -c 1 -W 1`, in parallel batches of 200
 - The scan script is uploaded via SFTP to avoid ESXi's inline command-length limit
 - Any IP that responds is flagged as a **conflict** — it is already in use in the VLAN and must be added to the "Excluded IP Ranges" of the IP Block so Supervisor does not assign it to workloads
-- If conflicts are found, temp IPs for hosts 1–N are re-picked automatically to avoid the conflicting addresses
-- After the scan, PowerCLI adds VMkernel NICs to hosts 1–N using the (potentially re-picked) temp IPs
+- If conflicts are found, temp IPs for hosts 1–N are re-picked automatically to avoid the conflicting addresses; then PowerCLI adds VMkernel NICs to hosts 1–N using the (potentially re-picked) temp IPs
 
 **Phase 3 — Gateway ping (all hosts)**
 - SSH to each host, run `vmkping -I {vmk} -d -s 28 {gateway}`, check for 0% packet loss
 - Reports a per-host pass/fail result
 
 **Results**
-- If conflicts were detected, a yellow warning box appears on host 0's row with the conflicting IPs and a **"Fix in vCenter → IP Blocks"** button that opens VPC > Configure > IP Blocks directly
+- If conflicts were detected, a yellow warning box appears on host 0's row with two fix options:
+  - **Fix Automatically** — calls `/api/fix/add-ip-block-exclusion` which merges the conflicting IPs with any existing exclusions, consolidates consecutive addresses into ranges, and writes them to the NSX native `excluded_ips` field via a single NSX `PUT` call. On success, click **"Run Again"** to re-run the check and confirm no conflicts remain.
+  - **Fix Manually** — opens vCenter → Virtual Private Clouds → Configure → IP Blocks directly in a new tab
 - The button turns green only when all hosts pass the gateway ping **and** no conflicts were found; red otherwise
 - All temporary VMkernel NICs and the DVPortGroup are removed automatically after the test
 
@@ -290,16 +298,18 @@ Earlier versions of this check rejected RFC-1918 ranges (private IPs), but in la
 ```
 · ext-ip-block-1
   CIDR: 10.1.7.128/25
-  Excluded ranges: 10.1.7.254
+  Excluded ranges: 10.1.7.130-10.1.7.131
 · ext-ip-block-2
   CIDR: 10.1.9.128/25
 ```
+
+Excluded ranges are read from the NSX native `excluded_ips` field (`[{start, end}]`). The tool fetches each block individually since the list endpoint omits this field.
 
 **Fix wizard (automated):**
 - Name is pre-filled (`dist-ext-ip-block-1` or `cent-ext-ip-block-1`)
 - CIDR is pre-filled from the TGW's DVLAN connection gateway subnet (read-only); if multiple DVLAN connections exist, a dropdown lets you choose which one to cover
 - Optional: enter comma-separated excluded IP ranges
-- Creates `PUT /policy/api/v1/infra/ip-blocks/{name}` with `visibility: EXTERNAL`
+- Creates `PUT /policy/api/v1/infra/ip-blocks/{name}` with `visibility: EXTERNAL` and exclusions written to the NSX native `excluded_ips` field (`[{start, end}]`)
 
 **Open in vCenter:** An **"Open in vCenter (Ext. IP Block)"** link button opens VPC > Configure > **IP Blocks** directly in the vSphere Client.
 
@@ -353,6 +363,18 @@ Fully reactive form:
 - If the profile exists with a different TGW → creates a new profile with a different ID (NSX does not allow changing `transit_gateway_path` on an existing profile)
 
 **Open in vCenter:** An **"Open in vCenter (VPC Conn. Prof.)"** link button opens VPC > Configure > **Connectivity Profile** directly in the vSphere Client.
+
+---
+
+## VDS/FLB — S3 (VLANs/Subnets for Supervisor and FLB)
+
+The VDS/FLB column shows Auth, S1, and S2 (same as the NSX modes), then a single informational step instead of the NSX-specific steps S3–S5-4.
+
+**What it shows:** A reminder that deploying Supervisor with VDS requires the admin to pre-configure the correct VLANs and subnets for the Supervisor control plane and FLB networking. The tool does not automate or validate these for VDS/FLB mode.
+
+**Status:** ℹ️ Info — the overall column chip shows **"To Validate"** (grey). This is not an error; it simply means the admin needs to verify these networking requirements manually before deploying.
+
+**Fix:** Not automated — consult the VMware VCF 9.1 documentation for VDS/FLB Supervisor prerequisites.
 
 ---
 
