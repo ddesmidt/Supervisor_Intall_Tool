@@ -20,7 +20,7 @@ The tool runs the same set of checks against three deployment modes in parallel.
 |---|---|---|
 | Auth | vCenter Authentication | ✅ |
 | S1 | Supervisor Capability | ✅ |
-| S2 | **vSphere HA / DRS** | ✅ |
+| S2 | vSphere HA / DRS | ✅ |
 | S3 | NSX Host Preparation | NSX only |
 | S4 | VNA Cluster / Edge Cluster | NSX only |
 | S5-1 | External Connection | NSX only |
