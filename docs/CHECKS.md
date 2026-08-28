@@ -186,15 +186,31 @@ This step differs between modes.
 **Open in vCenter:** An **"Open in vCenter (Ext. Conn.)"** link button opens the External Connections page directly in the vSphere Client.
 
 **Check VLAN button:**
-Once S5-1 through S5-4 are all green, a **"Check VLAN"** button appears on S5-1 in the Distributed column. It verifies end-to-end VLAN reachability on every ESX host:
+Once S5-1 through S5-4 are all green, a **"Check VLAN"** button appears on S5-1 in the Distributed column. It verifies end-to-end VLAN reachability on every ESX host and validates that the External IP Block's exclusion list is complete.
 
-1. Prompts for the root password of each ESX host (entering the first password auto-fills all others)
-2. Creates a temporary DVPortGroup on the VDS with the connection's VLAN ID
-3. Adds a temporary VMkernel NIC per ESX host using an auto-selected IP from the connection subnet (avoids gateway and any excluded ranges)
-4. **Scans all IPs in the External IP Block** (excluding the gateway and already-excluded ranges) in parallel batches of 200, using `vmkping` from the first ESX host. Any IP that responds is flagged as a conflict — it is already in use in the VLAN and must be added to the "Excluded IP Ranges" of the IP Block to prevent Supervisor from assigning it to workloads. Conflicts are shown in a yellow warning box with a **"Fix in vCenter → IP Blocks"** button.
-5. Pings the VLAN gateway from each VMkernel NIC
-6. Reports a per-host pass/fail result (green = all pass + no conflicts, red = any fail or conflict)
-7. Removes all temporary VMkernel NICs and destroys the temporary DVPortGroup
+The check runs in three phases:
+
+**Phase 1 — Setup (host 0 only)**
+- Prompts for the root password of each ESX host (entering the first password auto-fills all others)
+- PowerCLI creates a temporary DVPortGroup on the VDS with the connection's VLAN ID
+- A temporary VMkernel NIC is created on **host 0 only** (the other hosts' NICs are deferred until after the scan, so any responding IP is guaranteed to be a real server, not one of our own NICs)
+- Temp IPs are auto-selected from the External IP Block subnet, skipping: the gateway, any already-excluded ranges, and three commonly-reserved addresses (`subnet+2`, `subnet+3`, `broadcast-1`, often used by HSRP/VRRP)
+
+**Phase 2 — IP conflict scan (from host 0)**
+- SSH to host 0, then scan **every IP in the External IP Block** (excluding: gateway, already-excluded ranges, and host 0's own temp IP) using `vmkping -c 1 -W 1`, in parallel batches of 200
+- The scan script is uploaded via SFTP to avoid ESXi's inline command-length limit
+- Any IP that responds is flagged as a **conflict** — it is already in use in the VLAN and must be added to the "Excluded IP Ranges" of the IP Block so Supervisor does not assign it to workloads
+- If conflicts are found, temp IPs for hosts 1–N are re-picked automatically to avoid the conflicting addresses
+- After the scan, PowerCLI adds VMkernel NICs to hosts 1–N using the (potentially re-picked) temp IPs
+
+**Phase 3 — Gateway ping (all hosts)**
+- SSH to each host, run `vmkping -I {vmk} -d -s 28 {gateway}`, check for 0% packet loss
+- Reports a per-host pass/fail result
+
+**Results**
+- If conflicts were detected, a yellow warning box appears on host 0's row with the conflicting IPs and a **"Fix in vCenter → IP Blocks"** button that opens VPC > Configure > IP Blocks directly
+- The button turns green only when all hosts pass the gateway ping **and** no conflicts were found; red otherwise
+- All temporary VMkernel NICs and the DVPortGroup are removed automatically after the test
 
 ### S5-1 — Centralized: Centralized External Connection
 
