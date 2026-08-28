@@ -530,12 +530,15 @@ def check_requirements():
                     bad.append(f"DRS not Fully Automated (mode: {beh})")
                 if bad:
                     cluster_issues.append(f"{name}: {', '.join(bad)}")
-                    cluster_details.append(f"  · {name}: {', '.join(bad)}")
+                    lines = [f"· {name}:"]
+                    for b in bad:
+                        lines.append(f"  - {b}")
+                    cluster_details.append("\n".join(lines))
                     clusters_to_fix.append({"moref": moref, "name": name, "issues": bad})
                 else:
                     beh = c.get("drs_behavior") or "fullyAutomated"
                     cluster_ok.append(name)
-                    cluster_details.append(f"  · {name}: HA ✓  DRS ✓ ({beh})")
+                    cluster_details.append(f"· {name}:\n  - DRS ✓ ({beh})\n  - HA ✓")
             if cluster_issues:
                 add("2", "vSphere HA / DRS", "error",
                     f"{len(cluster_issues)} cluster(s) missing HA or DRS",
@@ -734,7 +737,7 @@ def check_requirements():
                         detail_lines.append(f"· {name}\n  Tier-0: {t0}")
                     names = [gc.get("display_name", gc.get("id","?")) for gc in d["gw_conn"]]
                     add("5-1", "Centralized External Connection", "ok",
-                        f"Gateway Connection: {', '.join(names)}",
+                        f"{len(d['gw_conn'])} Centralized External Connection(s): {', '.join(names)}",
                         "\n".join(detail_lines))
                 else:
                     add("5-1", "Centralized External Connection", "error",
@@ -765,14 +768,19 @@ def check_requirements():
                             tname = a.get("_tgw_name", a.get("_tgw_id", "Transit Gateway"))
                             tgw_groups.setdefault(tname, []).append(a.get("connection_path", "?"))
                         lines = []
+                        first_tgw_name = next(iter(tgw_groups), "")
+                        tgw_names_dist = list(tgw_groups.keys())
+                        dist_subtitle = (f"1 Distributed Transit Gateway: {tgw_names_dist[0]}"
+                                         if len(tgw_names_dist) == 1
+                                         else f"{len(tgw_names_dist)} Distributed Transit Gateways")
                         for tname, cps in tgw_groups.items():
                             lines.append(f"· {tname}")
                             for cp in cps:
                                 conn_name = cp.rstrip("/").split("/")[-1]
                                 lines.append(f"  Attached to: {conn_name}")
                         add("5-2", "Distributed Transit Gateway", "ok",
-                            f"{len(dist_att)} Distributed Transit Gateway attachment(s)",
-                            "\n".join(lines))
+                            dist_subtitle,
+                            "\n".join(lines), tgw_name=first_tgw_name)
                     elif d.get("tgw"):
                         if centralized_att:
                             # Case 2: Default TGW is already Centralized → must create a new TGW
@@ -834,7 +842,7 @@ def check_requirements():
                             except Exception:
                                 pass
                         add("5-2", "Centralized Transit Gateway", "ok",
-                            subtitle, "\n".join(lines))
+                            subtitle, "\n".join(lines), tgw_name=tgw_names[0] if tgw_names else "")
                     elif d.get("tgw"):
                         add("5-2", "Centralized Transit Gateway", "error",
                             "No existing Centralized Transit Gateway.",
@@ -3125,9 +3133,10 @@ def _vc_soap_destroy_dvpg(s, ep, hdr, dvpg_moref):
         '</Destroy_Task></Body></Envelope>'))
 
 
-def _pcli_setup_vlan_test(vc_url, vc_user, vc_pass, vds_name, pg_name, vlan_id, host_ips):
+def _pcli_setup_vlan_test(vc_url, vc_user, vc_pass, vds_name, pg_name, vlan_id, host_ips,
+                          pg_already_exists=False):
     """
-    PowerCLI: creates DVPortGroup + one vmk per host via New-VMHostNetworkAdapter.
+    PowerCLI: creates DVPortGroup (unless pg_already_exists) + one vmk per host.
     host_ips: list of (fqdn, ip_str, mask_str) tuples.
     Returns (vmk_map, pg_created, error_str)
       vmk_map: {fqdn: vmk_name}
@@ -3146,15 +3155,22 @@ def _pcli_setup_vlan_test(vc_url, vc_user, vc_pass, vds_name, pg_name, vlan_id, 
                 Write-Host "VMK_ERR:{fqdn}:$($_.Exception.Message)"
             }}"""))
 
+    if pg_already_exists:
+        pg_block = f"$pg = Get-VDPortgroup -Name '{pg_name}'"
+    else:
+        pg_block = (f"Get-VDPortgroup -Name '{pg_name}' -ErrorAction SilentlyContinue"
+                    f" | Remove-VDPortgroup -Confirm:$false\n"
+                    f"        $pg = New-VDPortgroup -VDSwitch $vds -Name '{pg_name}'"
+                    f" -VlanId {vlan_id} -NumPorts 16\n"
+                    f"        Write-Host \"PG:CREATED:{pg_name}\"\n"
+                    f"        Start-Sleep -Seconds 3")
+
     script = textwrap.dedent(f"""\
         $ErrorActionPreference = 'Stop'
         Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false -Scope Session | Out-Null
         Connect-VIServer -Server '{vc_host}' -User '{vc_user}' -Password '{vc_pass}' -Force | Out-Null
         $vds = Get-VDSwitch -Name '{vds_name}'
-        Get-VDPortgroup -Name '{pg_name}' -ErrorAction SilentlyContinue | Remove-VDPortgroup -Confirm:$false
-        $pg = New-VDPortgroup -VDSwitch $vds -Name '{pg_name}' -VlanId {vlan_id} -NumPorts 16
-        Write-Host "PG:CREATED:{pg_name}"
-        Start-Sleep -Seconds 3
+        {pg_block}
         {chr(10).join(per_host_lines)}
         Disconnect-VIServer -Confirm:$false | Out-Null
         Write-Host "PCLI_SETUP_DONE"
@@ -3303,34 +3319,194 @@ def check_vlan():
             result["error"] = "Could not determine NSX VDS name from host transport nodes."
             return jsonify(result)
 
-        # ── 4. Allocate temp IPs ─────────────────────────────────────────────
-        temp_ips = _pick_temp_ips(block_cidr, gateway_cidr, excl_str, len(hosts))
+        # ── 4. Compute reserved IPs + allocate temp IPs ─────────────────────
+        # Reserved = subnet_network+2, subnet_network+3, broadcast-1.
+        # These are often used by physical infrastructure (HSRP/VRRP etc.) and
+        # should not be assigned as temp IPs.  If they fall inside the External
+        # IP Block we will also probe them to detect stale allocations.
+        _seen_r: set = set()
+        reserved_in_subnet: list = []
+        for _r in [dvlan_net.network_address + 2,
+                   dvlan_net.network_address + 3,
+                   dvlan_net.broadcast_address - 1]:
+            if str(_r) not in _seen_r:
+                _seen_r.add(str(_r)); reserved_in_subnet.append(_r)
+
+        # Parse the existing exclusion string into a set for quick lookup
+        _gw_addr = _ip.ip_address(gateway_ip)
+        _excl_set: set = set()
+        for tok in (excl_str or "").split(","):
+            tok = tok.strip()
+            if not tok: continue
+            if "-" in tok:
+                try:
+                    a, b = tok.split("-", 1)
+                    for i in range(int(_ip.ip_address(a.strip())),
+                                   int(_ip.ip_address(b.strip())) + 1):
+                        _excl_set.add(_ip.ip_address(i))
+                except Exception: pass
+            else:
+                try: _excl_set.add(_ip.ip_address(tok))
+                except Exception: pass
+
+        # Build combined exclusion for _pick_temp_ips (explicit + reserved)
+        _res_str = ",".join(str(r) for r in reserved_in_subnet)
+        _combined_excl = f"{excl_str},{_res_str}" if excl_str else _res_str
+
+        temp_ips = _pick_temp_ips(block_cidr, gateway_cidr, _combined_excl, len(hosts))
         if not temp_ips:
             result["error"] = "No available IPs in External IP Block for temp vmk."
             return jsonify(result)
         hosts = hosts[:len(temp_ips)]
 
-        # ── 5. PowerCLI: create portgroup + vmk on every host ──────────────
+        # ── 5a. Phase 1: PG + vmknic for host-0 only ──────────────────────
+        # We create only host-0's vmknic first so the IP scan runs before
+        # the other hosts' temp IPs exist on the VLAN — any response is a
+        # real server, not our own vmknic.
         pg_name = f"vcf-vlan-check-{vlan_id}"
-        host_ips_arg = [(h, temp_ips[i], mask_str) for i, h in enumerate(hosts)]
         vmk_map, _pg_created, setup_err = _pcli_setup_vlan_test(
-            vc_url, vc_user, vc_pass, nsx_vds_name, pg_name, vlan_id, host_ips_arg)
+            vc_url, vc_user, vc_pass, nsx_vds_name, pg_name, vlan_id,
+            [(hosts[0], temp_ips[0], mask_str)])
         if setup_err:
             result["error"] = f"PowerCLI setup failed: {setup_err}"
             return jsonify(result)
 
-        # ── 6. Per-host: SSH → vmkping ────────────────────────────────────
+        # ── 5b. Pre-scan from host-0 ───────────────────────────────────────
+        # Scan ALL IPs in block (excl. gateway, excl_ranges, host-0's own IP).
+        # No other vmknics exist yet → every RESPOND is a real server.
+        _block_net_obj = _ip.ip_network(block_cidr, strict=False)
+        _scan_excl_pre = _excl_set | {_gw_addr, _ip.ip_address(temp_ips[0])}
+        _prescan_ips = [
+            str(_ip.ip_address(h))
+            for h in range(int(_block_net_obj.network_address) + 1,
+                           int(_block_net_obj.broadcast_address))
+            if _ip.ip_address(h) not in _scan_excl_pre
+        ]
+        _prescan_conflict: str | None    = None
+        _prescan_steps:    list          = []
+        _prescan_ssh_was_on: bool | None = None  # tracks host-0 SSH state for cleanup
+        _vmk0 = vmk_map.get(hosts[0])
+
+        if _prescan_ips and _vmk0:
+            _prescan_steps.append(
+                f"Scanning {len(_prescan_ips)} IPs in {block_cidr} for conflicts…")
+            _pssh = None
+            try:
+                _pok, _pstate = _vc_manage_ssh(vc_url, vc_user, vc_pass, hosts[0], True)
+                _prescan_ssh_was_on = _pstate  # True = already on; False = we enabled it
+                if _pok:
+                    if not _pstate:
+                        _time.sleep(5)
+                    _pw0 = host_passwords.get(hosts[0]) or esx_pass
+                    _pssh = _para.SSHClient()
+                    _pssh.set_missing_host_key_policy(_para.AutoAddPolicy())
+                    for _att in range(6):
+                        try:
+                            _pssh.connect(hosts[0], username="root",
+                                          password=_pw0, timeout=10)
+                            break
+                        except Exception as _es:
+                            _es_s = str(_es).lower()
+                            if any(k in _es_s for k in (
+                                    "authentication", "bad authentication",
+                                    "keyboard", "publickey")):
+                                raise RuntimeError(
+                                    f"ESX root password incorrect for {hosts[0]}.") from _es
+                            if _att < 5: _time.sleep(2)
+                            else: raise
+                    _time.sleep(2)
+
+                    def _prun(cmd, timeout=60):
+                        _, so, se = _pssh.exec_command(cmd, timeout=timeout)
+                        return so.read().decode("utf-8", "replace"), \
+                               se.read().decode("utf-8", "replace")
+
+                    BATCH = 200
+                    _sl: list = [f"vmk='{_vmk0}'"]
+                    for _bi in range(0, len(_prescan_ips), BATCH):
+                        _b = _prescan_ips[_bi:_bi + BATCH]
+                        for _sip in _b:
+                            _k = _sip.replace(".", "_")
+                            _sl.append(f"vmkping -c 1 -W 1 -I $vmk {_sip}"
+                                       f" > /tmp/_vp_{_k} 2>&1 &")
+                        _sl.append("wait")
+                        for _sip in _b:
+                            _k = _sip.replace(".", "_")
+                            _sl.append(f"grep -q 'bytes from {_sip}'"
+                                       f" /tmp/_vp_{_k} 2>/dev/null"
+                                       f" && echo RESPOND:{_sip}")
+                            _sl.append(f"rm -f /tmp/_vp_{_k} 2>/dev/null")
+                    _sl.append("echo SCAN_DONE")
+                    _sto = max(30, (len(_prescan_ips) // BATCH + 1) * 2 + 10)
+                    _sout, _ = _prun("\n".join(_sl), timeout=_sto)
+
+                    _conflict_ips: list = [
+                        ln.split("RESPOND:", 1)[1].strip()
+                        for ln in _sout.splitlines()
+                        if ln.startswith("RESPOND:")
+                    ]
+                    _prescan_steps.append(
+                        f"Scan complete — {len(_conflict_ips)} IP(s) responded")
+
+                    if _conflict_ips:
+                        # Re-pick temp IPs for hosts 1-N, avoiding conflicts
+                        if len(hosts) > 1:
+                            _excl_c = ((excl_str or "") +
+                                       ("," if excl_str else "") +
+                                       ",".join(_conflict_ips) + "," + temp_ips[0])
+                            _new_rest = list(_pick_temp_ips(
+                                block_cidr, gateway_cidr, _excl_c, len(hosts) - 1))
+                            if len(_new_rest) == len(hosts) - 1:
+                                temp_ips = [temp_ips[0]] + _new_rest
+                                _prescan_steps.append(
+                                    "Reassigned temp IPs for remaining hosts "
+                                    "to avoid conflicts")
+                        _prescan_conflict = (
+                            f"IP conflict in VLAN {vlan_id}: "
+                            f"{', '.join(_conflict_ips)} responded to ping "
+                            f"but are not in the Excluded Ranges of the "
+                            f"External IP Block.\n"
+                            f"These addresses are in use in the VLAN "
+                            f"(by the router or a physical server).\n"
+                            f"Add them to the 'Excluded IP Ranges' of the "
+                            f"IP Block to prevent Supervisor from assigning"
+                            f" them to workloads.")
+                        _prescan_steps.append(_prescan_conflict)
+                else:
+                    _prescan_steps.append(
+                        f"Could not enable SSH on {hosts[0]} — conflict scan skipped")
+            except Exception as _ep:
+                _prescan_steps.append(f"Pre-scan error (conflict scan skipped): {_ep}")
+            finally:
+                if _pssh:
+                    try: _pssh.close()
+                    except Exception: pass
+                # Keep SSH enabled — the main gateway-ping loop needs it for host-0
+
+        # ── 5c. Phase 2: vmknics for hosts 1-N ────────────────────────────
+        if len(hosts) > 1:
+            _ph2_arg = [(hosts[i], temp_ips[i], mask_str) for i in range(1, len(hosts))]
+            _vmk2, _, _err2 = _pcli_setup_vlan_test(
+                vc_url, vc_user, vc_pass, nsx_vds_name, pg_name, vlan_id,
+                _ph2_arg, pg_already_exists=True)
+            if not _err2:
+                vmk_map.update(_vmk2)
+
+        # ── 6. Per-host: SSH → gateway ping ───────────────────────────────
         for idx, fqdn in enumerate(hosts):
             temp_ip = temp_ips[idx]
             vmk_dev = vmk_map.get(fqdn)
             test: dict = {
                 "host": fqdn, "vlan_id": vlan_id,
                 "temp_ip": temp_ip, "gateway": gateway_ip,
-                "vmk": vmk_dev, "result": "error", "output": "", "error": None
+                "vmk": vmk_dev, "result": "error", "output": "", "error": None,
+                "conflict": _prescan_conflict if idx == 0 else None
             }
             result["tests"].append(test)
-            steps = [f"✓ VDS='{nsx_vds_name}', PG='{pg_name}' (VLAN {vlan_id})",
-                     f"✓ Temp IP={temp_ip}/{prefix_len}, Gateway={gateway_ip}"]
+            steps = (list(_prescan_steps) if idx == 0 else []) + [
+                f"✓ VDS='{nsx_vds_name}', PG='{pg_name}' (VLAN {vlan_id})",
+                f"✓ Temp IP={temp_ip}/{prefix_len}, Gateway={gateway_ip}"
+            ]
             ssh_state = None
             ssh_client = None
 
@@ -3342,13 +3518,20 @@ def check_vlan():
 
                 steps.append(f"✓ vmk created via PowerCLI: {vmk_dev} with IP {temp_ip}/{prefix_len}")
 
-                ok_ssh, ssh_state = _vc_manage_ssh(vc_url, vc_user, vc_pass, fqdn, True)
-                if not ok_ssh:
-                    test["error"] = f"Could not enable SSH on {fqdn} via vCenter"
-                    test["output"] = "\n".join(steps); continue
-                if not ssh_state:
-                    _time.sleep(5)
-                steps.append("✓ SSH enabled")
+                # For host-0 SSH was already enabled during the pre-scan phase.
+                # _prescan_ssh_was_on tells us whether WE enabled it (False) or
+                # it was already on (True / None = pre-scan was skipped).
+                if idx == 0 and _prescan_ssh_was_on is not None:
+                    ssh_state = _prescan_ssh_was_on
+                    steps.append("✓ SSH enabled (from pre-scan phase)")
+                else:
+                    ok_ssh, ssh_state = _vc_manage_ssh(vc_url, vc_user, vc_pass, fqdn, True)
+                    if not ok_ssh:
+                        test["error"] = f"Could not enable SSH on {fqdn} via vCenter"
+                        test["output"] = "\n".join(steps); continue
+                    if not ssh_state:
+                        _time.sleep(5)
+                    steps.append("✓ SSH enabled")
 
                 host_pwd = host_passwords.get(fqdn) or esx_pass
                 ssh_client = _para.SSHClient()
@@ -3359,10 +3542,21 @@ def check_vlan():
                                            password=host_pwd, timeout=10)
                         break
                     except Exception as e_ssh:
+                        err_str = str(e_ssh).lower()
+                        is_auth = (
+                            "authentication" in err_str or
+                            "bad authentication type" in err_str or
+                            "keyboard-interactive" in err_str or
+                            "publickey" in err_str
+                        )
+                        if is_auth:
+                            raise RuntimeError(
+                                f"ESX root password incorrect for {fqdn}.\n"
+                                "Please enter the correct root password and run again.") from e_ssh
                         if attempt < 5: _time.sleep(2)
                         else: raise RuntimeError(
-                            f"SSH to {fqdn} failed: {e_ssh}\n"
-                            "Check that this VM can reach ESX port 22.") from e_ssh
+                            f"Cannot reach {fqdn} via SSH.\n"
+                            "Check that port 22 is reachable from this VM.") from e_ssh
                 steps.append("✓ SSH connected")
 
                 def _run(cmd, timeout=30):
@@ -3371,18 +3565,22 @@ def check_vlan():
 
                 _time.sleep(2)   # brief pause for vmk IP stack to initialise
 
+                # ── Gateway ping ──────────────────────────────────────────────
                 ping_out, ping_err = _run(
                     f"vmkping -I {vmk_dev} -d -s 28 {gateway_ip}", timeout=30)
                 ping_combined = (ping_out + ping_err).strip()
-                steps.append(f"vmkping:\n{ping_combined}" if ping_combined
-                              else "vmkping: no output")
+                steps.append(f"vmkping {gateway_ip} (gateway):\n{ping_combined}"
+                              if ping_combined else "vmkping: no output")
+                gw_passed = "0% packet loss" in ping_out or "bytes from" in ping_out
+                test["result"] = "pass" if gw_passed else "fail"
+
                 test["output"] = "\n".join(steps)
-                test["result"] = (
-                    "pass" if ("0% packet loss" in ping_out or "bytes from" in ping_out)
-                    else "fail")
 
             except Exception as exc:
-                test["error"] = f"{exc}\n{traceback.format_exc()}"
+                if isinstance(exc, RuntimeError):
+                    test["error"] = str(exc)
+                else:
+                    test["error"] = f"{exc}\n{traceback.format_exc()}"
                 test["output"] = "\n".join(steps)
             finally:
                 if ssh_client:
@@ -3392,10 +3590,18 @@ def check_vlan():
                     try: _vc_manage_ssh(vc_url, vc_user, vc_pass, fqdn, False)
                     except Exception: pass
 
-        passed = sum(1 for t in result["tests"] if t["result"] == "pass")
-        total  = len(result["tests"])
-        result["success"] = total > 0 and passed == total
-        result["summary"] = f"{passed}/{total} host(s) passed VLAN {vlan_id} connectivity test"
+        passed    = sum(1 for t in result["tests"] if t["result"] == "pass")
+        total     = len(result["tests"])
+        conflicts = [t["conflict"] for t in result["tests"] if t.get("conflict")]
+        gw_ok     = total > 0 and passed == total
+        result["success"] = gw_ok and not conflicts
+        if gw_ok and not conflicts:
+            result["summary"] = f"{passed}/{total} host(s) passed VLAN {vlan_id} connectivity test"
+        elif gw_ok and conflicts:
+            result["summary"] = (f"{passed}/{total} host(s) passed gateway ping — "
+                                 f"but IP conflicts detected in VLAN {vlan_id}")
+        else:
+            result["summary"] = f"{passed}/{total} host(s) passed VLAN {vlan_id} connectivity test"
 
     except Exception:
         result["error"] = traceback.format_exc()
@@ -3405,7 +3611,473 @@ def check_vlan():
             except Exception: pass
 
     return jsonify(result)
-    return jsonify(result)
+
+
+@app.route("/api/vc-cluster-page-url", methods=["POST"])
+def vc_cluster_page_url():
+    """
+    Return vSphere-Client deep links to any standard cluster Configure sub-page.
+    The caller passes a `page` string that is appended after /configure/, e.g.:
+      page="drs"  →  .../configure/drs
+      page="ha"   →  .../configure/ha
+    """
+    body    = request.get_json(force=True)
+    vc_url  = normalize_url(body.get("vc_url", ""))
+    vc_user = body.get("username", "")
+    vc_pass = body.get("password", "")
+    page    = body.get("page", "drs").strip("/")
+
+    vc_host      = vc_url.replace("https://", "").replace("http://", "").rstrip("/")
+    fallback_url = f"https://{vc_host}/ui/"
+
+    try:
+        # vCenter instance UUID (PropertyCollector, auth needed)
+        soap_s, soap_ep, soap_hdr = _soap_session(vc_url, vc_user, vc_pass)
+        r_uuid = soap_s.post(soap_ep, verify=False, timeout=10, headers=soap_hdr,
+            data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><RetrieveProperties xmlns="urn:vim25">'
+                '<_this type="PropertyCollector">propertyCollector</_this>'
+                '<specSet>'
+                '<propSet><type>ServiceInstance</type><all>false</all>'
+                '<pathSet>content.about.instanceUuid</pathSet></propSet>'
+                '<objectSet><obj type="ServiceInstance">ServiceInstance</obj></objectSet>'
+                '</specSet>'
+                '</RetrieveProperties></Body></Envelope>'))
+        m = re.search(r'<val[^>]*>([^<]+)</val>', r_uuid.text)
+        instance_uuid = m.group(1).strip() if m else ""
+
+        # Cluster list via REST
+        rest_s = requests.Session(); rest_s.verify = False
+        r = rest_s.post(f"{vc_url}/api/session",
+                        auth=(vc_user, vc_pass), verify=False, timeout=10)
+        if r.status_code != 201:
+            return jsonify({"urls": [], "fallback": fallback_url})
+
+        hdrs = {"vmware-api-session-id": r.json()}
+        r2   = rest_s.get(f"{vc_url}/api/vcenter/cluster",
+                          headers=hdrs, verify=False, timeout=10)
+        clusters = r2.json() if r2.status_code == 200 else []
+
+        urls = []
+        for c in clusters:
+            cid   = c.get("cluster", "")
+            cname = c.get("name", cid)
+            mor   = f"urn:vmomi:ClusterComputeResource:{cid}"
+            if instance_uuid:
+                mor = f"{mor}:{instance_uuid}"
+            url = f"https://{vc_host}/ui/app/cluster;nav=h/{mor}/configure/{page}"
+            urls.append({"name": cname, "url": url})
+
+        return jsonify({"urls": urls, "fallback": fallback_url})
+    except Exception as ex:
+        return jsonify({"urls": [], "error": str(ex), "fallback": fallback_url})
+
+
+@app.route("/api/vc-tgw-url", methods=["POST"])
+def vc_tgw_url():
+    """
+    Return a vSphere-Client deep link for a specific Transit Gateway.
+
+    URL pattern from HAR:
+      https://{vc}/ui/app/tgw;nav=n/
+        urn:vmomi:TransitGateway:{tgw-mor-id}:{instance-uuid}/
+        summary/plugin/com.vmware.nsx.management.nsxt.vpc/{ext_uid}
+
+    tgw_name (optional): display name to match; defaults to first TGW found.
+    """
+    body     = request.get_json(force=True)
+    vc_url   = normalize_url(body.get("vc_url", ""))
+    vc_user  = body.get("username", "")
+    vc_pass  = body.get("password", "")
+    tgw_name = body.get("tgw_name", "")   # optional hint
+
+    vc_host      = vc_url.replace("https://", "").replace("http://", "").rstrip("/")
+    fallback_url = f"https://{vc_host}/ui/"
+
+    try:
+        soap_s, soap_ep, soap_hdr = _soap_session(vc_url, vc_user, vc_pass)
+
+        # Instance UUID
+        r_uuid = soap_s.post(soap_ep, verify=False, timeout=10, headers=soap_hdr,
+            data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><RetrieveProperties xmlns="urn:vim25">'
+                '<_this type="PropertyCollector">propertyCollector</_this>'
+                '<specSet>'
+                '<propSet><type>ServiceInstance</type><all>false</all>'
+                '<pathSet>content.about.instanceUuid</pathSet></propSet>'
+                '<objectSet><obj type="ServiceInstance">ServiceInstance</obj></objectSet>'
+                '</specSet>'
+                '</RetrieveProperties></Body></Envelope>'))
+        m_uuid = re.search(r'<val[^>]*>([^<]+)</val>', r_uuid.text)
+        instance_uuid = m_uuid.group(1).strip() if m_uuid else ""
+
+        # VPC plugin version
+        r_ext = soap_s.post(soap_ep, verify=False, timeout=10, headers=soap_hdr,
+            data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><FindExtension xmlns="urn:vim25">'
+                '<_this type="ExtensionManager">ExtensionManager</_this>'
+                '<extensionKey>com.vmware.nsx.management.nsxt.vpc</extensionKey>'
+                '</FindExtension></Body></Envelope>'))
+        mv = re.search(r'<version>([^<]+)</version>', r_ext.text)
+        plugin_version = mv.group(1).strip() if mv else ""
+
+        ext_uid = (f"VC~com.vmware.nsx.management.nsxt.vpc~{plugin_version}~navigable~plugin.tgw.summary"
+                   if plugin_version else
+                   "VC~com.vmware.nsx.management.nsxt.vpc~navigable~plugin.tgw.summary")
+
+        # Enumerate TransitGateway managed objects via SOAP ContainerView
+        # Need SOAPAction vim25/9.1 so vCenter uses the current API version;
+        # without it the default old version doesn't know the TransitGateway type.
+        soap_hdr_v9 = dict(soap_hdr, **{"SOAPAction": "vim25/9.1"})
+
+        r_sc = soap_s.post(soap_ep, verify=False, timeout=10, headers=soap_hdr_v9,
+            data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><RetrieveServiceContent xmlns="urn:vim25">'
+                '<_this type="ServiceInstance">ServiceInstance</_this>'
+                '</RetrieveServiceContent></Body></Envelope>'))
+        m_rf = re.search(r'<rootFolder[^>]*>([^<]+)</rootFolder>', r_sc.text)
+        root_folder = m_rf.group(1).strip() if m_rf else "group-d1"
+
+        r_cv = soap_s.post(soap_ep, verify=False, timeout=10, headers=soap_hdr_v9,
+            data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><CreateContainerView xmlns="urn:vim25">'
+                '<_this type="ViewManager">ViewManager</_this>'
+                f'<container type="Folder">{root_folder}</container>'
+                '<type>TransitGateway</type>'
+                '<recursive>true</recursive>'
+                '</CreateContainerView></Body></Envelope>'))
+        m_cv = re.search(r'<returnval[^>]*type="ContainerView"[^>]*>([^<]+)</returnval>', r_cv.text)
+        if not m_cv:
+            return jsonify({"url": fallback_url, "error": "no TGW container view"})
+        cv_mor = m_cv.group(1).strip()
+
+        r_props = soap_s.post(soap_ep, verify=False, timeout=15, headers=soap_hdr_v9,
+            data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><RetrieveProperties xmlns="urn:vim25">'
+                '<_this type="PropertyCollector">propertyCollector</_this>'
+                '<specSet>'
+                '<propSet><type>TransitGateway</type><all>false</all>'
+                '<pathSet>name</pathSet></propSet>'
+                f'<objectSet><obj type="ContainerView">{cv_mor}</obj>'
+                '<selectSet xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="TraversalSpec">'
+                '<type>ContainerView</type><path>view</path></selectSet>'
+                '</objectSet></specSet>'
+                '</RetrieveProperties></Body></Envelope>'))
+
+        # Parse TGW MOR → name pairs
+        tgws: list[tuple[str,str]] = []
+        for block in re.finditer(
+                r'<returnval>(<obj type="TransitGateway">[^<]+</obj>.*?)</returnval>',
+                r_props.text, re.DOTALL):
+            chunk = block.group(1)
+            m_obj  = re.search(r'<obj type="TransitGateway">([^<]+)</obj>', chunk)
+            m_name = re.search(r'<val[^>]*>([^<]+)</val>', chunk)
+            if m_obj:
+                mor_id = m_obj.group(1).strip()
+                name   = m_name.group(1).strip() if m_name else mor_id
+                tgws.append((mor_id, name))
+
+        if not tgws:
+            return jsonify({"url": fallback_url, "error": "no TransitGateway objects found"})
+
+        # Prefer matching by name, otherwise use the first (default) TGW
+        chosen_mor, chosen_name = tgws[0]
+        if tgw_name:
+            for (mid, nm) in tgws:
+                if nm.lower() == tgw_name.lower():
+                    chosen_mor, chosen_name = mid, nm
+                    break
+
+        # Extract the bare ID from the MOR string (may be "tgw-32" or full MOR)
+        tgw_id = chosen_mor.split(":")[-1] if ":" in chosen_mor else chosen_mor
+
+        mor      = f"urn:vmomi:TransitGateway:{tgw_id}"
+        if instance_uuid:
+            mor = f"{mor}:{instance_uuid}"
+
+        url = (f"https://{vc_host}/ui/app/tgw;nav=n/{mor}"
+               f"/summary/plugin/com.vmware.nsx.management.nsxt.vpc/{ext_uid}")
+        return jsonify({"url": url, "tgw_name": chosen_name})
+
+    except Exception as ex:
+        return jsonify({"url": fallback_url, "error": str(ex)})
+
+
+@app.route("/api/vc-vcenter-folder-plugin-url", methods=["POST"])
+def vc_vcenter_folder_plugin_url():
+    """
+    Return a vSphere-Client deep link to a networking plugin page that is
+    scoped to the vCenter root folder (e.g. VNA Clusters, Edge Clusters).
+
+    URL pattern from HAR:
+      https://{vc}/ui/app/folder;nav=n/
+        urn:vmomi:Folder:{rootFolder}:{instance-uuid}/
+        configure/plugin/com.vmware.nsx.management.nsxt.networking/
+        VC~com.vmware.nsx.management.nsxt.networking~{version}~navigable~{nav_key}
+
+    The rootFolder is read from SOAP RetrieveServiceContent (no extra call needed).
+    """
+    body    = request.get_json(force=True)
+    vc_url  = normalize_url(body.get("vc_url", ""))
+    vc_user = body.get("username", "")
+    vc_pass = body.get("password", "")
+    nav_key = body.get("nav_key", "plugin.network.connectivity.vna.clusters")
+    # plugin: "networking" → com.vmware.nsx.management.nsxt.networking
+    #         "vpc"        → com.vmware.nsx.management.nsxt.vpc
+    plugin_short = body.get("plugin", "networking")
+    plugin_id    = f"com.vmware.nsx.management.nsxt.{plugin_short}"
+    # url_type: "folder"    → /ui/app/folder;nav=n/{mor}/configure/plugin/{id}/{ext_uid}
+    #           "extension" → /ui/extension/{ext_uid}
+    url_type = body.get("url_type", "folder")
+
+    vc_host      = vc_url.replace("https://", "").replace("http://", "").rstrip("/")
+    fallback_url = f"https://{vc_host}/ui/"
+
+    try:
+        soap_s, soap_ep, soap_hdr = _soap_session(vc_url, vc_user, vc_pass)
+
+        # Plugin version (FindExtension for whichever plugin was requested)
+        r_ext = soap_s.post(soap_ep, verify=False, timeout=10, headers=soap_hdr,
+            data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><FindExtension xmlns="urn:vim25">'
+                '<_this type="ExtensionManager">ExtensionManager</_this>'
+                f'<extensionKey>{plugin_id}</extensionKey>'
+                '</FindExtension></Body></Envelope>'))
+        mv = re.search(r'<version>([^<]+)</version>', r_ext.text)
+        plugin_version = mv.group(1).strip() if mv else ""
+
+        if plugin_version:
+            ext_uid = f"VC~{plugin_id}~{plugin_version}~navigable~{nav_key}"
+        else:
+            ext_uid = f"VC~{plugin_id}~navigable~{nav_key}"
+
+        # Folder-scoped format for all plugin pages
+        r_sc = soap_s.post(soap_ep, verify=False, timeout=10, headers=soap_hdr,
+            data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><RetrieveServiceContent xmlns="urn:vim25">'
+                '<_this type="ServiceInstance">ServiceInstance</_this>'
+                '</RetrieveServiceContent></Body></Envelope>'))
+        m_rf = re.search(r'<rootFolder[^>]*>([^<]+)</rootFolder>', r_sc.text)
+        root_folder = m_rf.group(1).strip() if m_rf else "group-d1"
+
+        r_uuid = soap_s.post(soap_ep, verify=False, timeout=10, headers=soap_hdr,
+            data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><RetrieveProperties xmlns="urn:vim25">'
+                '<_this type="PropertyCollector">propertyCollector</_this>'
+                '<specSet>'
+                '<propSet><type>ServiceInstance</type><all>false</all>'
+                '<pathSet>content.about.instanceUuid</pathSet></propSet>'
+                '<objectSet><obj type="ServiceInstance">ServiceInstance</obj></objectSet>'
+                '</specSet>'
+                '</RetrieveProperties></Body></Envelope>'))
+        m_uuid = re.search(r'<val[^>]*>([^<]+)</val>', r_uuid.text)
+        instance_uuid = m_uuid.group(1).strip() if m_uuid else ""
+
+        mor = f"urn:vmomi:Folder:{root_folder}"
+        if instance_uuid:
+            mor = f"{mor}:{instance_uuid}"
+
+        url = (f"https://{vc_host}/ui/app/folder;nav=n/{mor}"
+               f"/configure/plugin/{plugin_id}/{ext_uid}")
+
+        return jsonify({"url": url, "fallback": fallback_url})
+    except Exception as ex:
+        return jsonify({"url": fallback_url, "error": str(ex)})
+
+
+@app.route("/api/vc-network-config-url", methods=["POST"])
+def vc_network_config_url():
+    """
+    Return vSphere-Client deep links to the NSX Network Configuration page
+    (Cluster > Configure > Networking > Network Configuration) for every
+    cluster in the given vCenter.
+
+    URL pattern discovered from HAR:
+      https://{vc}/ui/app/cluster;nav=h/
+        urn:vmomi:ClusterComputeResource:{cluster-id}:{instance-uuid}/
+        configure/plugin/com.vmware.nsx.management.nsxt.networking/
+        VC~com.vmware.nsx.management.nsxt.networking~{version}
+          ~navigable~plugin.network.connectivity.overlay.network.configuration
+    """
+    body    = request.get_json(force=True)
+    vc_url  = normalize_url(body.get("vc_url", ""))
+    vc_user = body.get("username", "")
+    vc_pass = body.get("password", "")
+
+    vc_host      = vc_url.replace("https://", "").replace("http://", "").rstrip("/")
+    fallback_url = f"https://{vc_host}/ui/"
+
+    try:
+        # ── 1. SOAP: instance UUID + networking plugin version ────────────
+        soap_s, soap_ep, soap_hdr = _soap_session(vc_url, vc_user, vc_pass)
+
+        r_uuid = soap_s.post(soap_ep, verify=False, timeout=10, headers=soap_hdr,
+            data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><RetrieveProperties xmlns="urn:vim25">'
+                '<_this type="PropertyCollector">propertyCollector</_this>'
+                '<specSet>'
+                '<propSet><type>ServiceInstance</type><all>false</all>'
+                '<pathSet>content.about.instanceUuid</pathSet></propSet>'
+                '<objectSet><obj type="ServiceInstance">ServiceInstance</obj></objectSet>'
+                '</specSet>'
+                '</RetrieveProperties></Body></Envelope>'))
+        m = re.search(r'<val[^>]*>([^<]+)</val>', r_uuid.text)
+        instance_uuid = m.group(1).strip() if m else ""
+
+        r_ext = soap_s.post(soap_ep, verify=False, timeout=10, headers=soap_hdr,
+            data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><FindExtension xmlns="urn:vim25">'
+                '<_this type="ExtensionManager">ExtensionManager</_this>'
+                '<extensionKey>com.vmware.nsx.management.nsxt.networking</extensionKey>'
+                '</FindExtension></Body></Envelope>'))
+        mv = re.search(r'<version>([^<]+)</version>', r_ext.text)
+        plugin_version = mv.group(1).strip() if mv else ""
+
+        # Extension UID (tildes kept as-is — the browser URL uses them verbatim)
+        if plugin_version:
+            ext_uid = (f"VC~com.vmware.nsx.management.nsxt.networking"
+                       f"~{plugin_version}~navigable"
+                       f"~plugin.network.connectivity.overlay.network.configuration")
+        else:
+            ext_uid = ("VC~com.vmware.nsx.management.nsxt.networking"
+                       "~navigable~plugin.network.connectivity.overlay.network.configuration")
+
+        # ── 2. REST: list clusters ────────────────────────────────────────
+        rest_s = requests.Session(); rest_s.verify = False
+        r = rest_s.post(f"{vc_url}/api/session",
+                        auth=(vc_user, vc_pass), verify=False, timeout=10)
+        if r.status_code != 201:
+            return jsonify({"urls": [], "fallback": fallback_url})
+
+        hdrs = {"vmware-api-session-id": r.json()}
+        r2   = rest_s.get(f"{vc_url}/api/vcenter/cluster",
+                          headers=hdrs, verify=False, timeout=10)
+        clusters = r2.json() if r2.status_code == 200 else []
+
+        urls = []
+        for c in clusters:
+            cid   = c.get("cluster", "")   # e.g. "domain-c9"
+            cname = c.get("name", cid)
+            mor   = f"urn:vmomi:ClusterComputeResource:{cid}"
+            if instance_uuid:
+                mor = f"{mor}:{instance_uuid}"
+            url = (f"https://{vc_host}/ui/app/cluster;nav=h/{mor}"
+                   f"/configure/plugin/com.vmware.nsx.management.nsxt.networking/{ext_uid}")
+            urls.append({"name": cname, "url": url})
+
+        return jsonify({"urls": urls, "fallback": fallback_url})
+    except Exception as ex:
+        return jsonify({"urls": [], "error": str(ex), "fallback": fallback_url})
+
+
+@app.route("/api/vc-vpc-ipblocks-url", methods=["POST"])
+def vc_vpc_ipblocks_url():
+    """
+    Resolve the vCenter deep-link URL for VPC > Configure > IP Blocks.
+
+    The vSphere Client deep-link format requires:
+      urn:vmomi:Folder:{folder-id}:{vcenter-instance-uuid}
+
+    The folder-id comes from the vCenter REST API folder list.
+    The instance UUID comes from the SOAP RetrieveServiceContent (no auth needed).
+    Falls back to the vCenter UI root if resolution fails.
+    """
+    body    = request.get_json(force=True)
+    vc_url  = normalize_url(body.get("vc_url", ""))
+    vc_user = body.get("username", "")
+    vc_pass = body.get("password", "")
+    nav_key = body.get("nav_key", "plugin.vpc.ip.blocks")
+
+    vc_host      = vc_url.replace("https://", "").replace("http://", "").rstrip("/")
+    fallback_url = f"https://{vc_host}/ui/"
+
+    try:
+        # ── 1. Authenticate via SOAP ────────────────────────────────────────
+        # RetrieveServiceContent in vCenter 9.x no longer includes instanceUuid
+        # in the <about> block; use the PropertyCollector instead.
+        soap_s, soap_ep, soap_hdr = _soap_session(vc_url, vc_user, vc_pass)
+
+        # vCenter instance UUID (needed for the full MOR in the deep link URL)
+        r_uuid = soap_s.post(soap_ep, verify=False, timeout=10, headers=soap_hdr,
+            data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><RetrieveProperties xmlns="urn:vim25">'
+                '<_this type="PropertyCollector">propertyCollector</_this>'
+                '<specSet>'
+                '<propSet><type>ServiceInstance</type><all>false</all>'
+                '<pathSet>content.about.instanceUuid</pathSet></propSet>'
+                '<objectSet><obj type="ServiceInstance">ServiceInstance</obj></objectSet>'
+                '</specSet>'
+                '</RetrieveProperties></Body></Envelope>'))
+        m = re.search(r'<val[^>]*>([^<]+)</val>', r_uuid.text)
+        instance_uuid = m.group(1).strip() if m else ""
+
+        # NSX VPC plugin version (needed to build the versioned extension UID
+        # that the vSphere Client embeds in the deep link URL)
+        r_ext = soap_s.post(soap_ep, verify=False, timeout=10, headers=soap_hdr,
+            data=(
+                '<Envelope xmlns="http://schemas.xmlsoap.org/soap/envelope/">'
+                '<Body><FindExtension xmlns="urn:vim25">'
+                '<_this type="ExtensionManager">ExtensionManager</_this>'
+                '<extensionKey>com.vmware.nsx.management.nsxt.vpc</extensionKey>'
+                '</FindExtension></Body></Envelope>'))
+        mv = re.search(r'<version>([^<]+)</version>', r_ext.text)
+        plugin_version = mv.group(1).strip() if mv else ""
+
+        # ── 2. Find the 'Virtual Private Clouds' folder via REST API ────────
+        rest_s = requests.Session(); rest_s.verify = False
+        r = rest_s.post(f"{vc_url}/api/session",
+                        auth=(vc_user, vc_pass), verify=False, timeout=10)
+        if r.status_code != 201:
+            return jsonify({"url": fallback_url})
+
+        token = r.json()
+        hdrs  = {"vmware-api-session-id": token}
+
+        r2 = rest_s.get(f"{vc_url}/api/vcenter/folder",
+                        headers=hdrs, verify=False, timeout=10)
+        folders = r2.json() if r2.status_code == 200 else []
+
+        vpc_folder_id = None
+        for f in folders:
+            name = (f.get("name") or "").lower()
+            if "virtual private" in name or "nsx-project" in name:
+                vpc_folder_id = f.get("folder", "")
+                break
+
+        if vpc_folder_id:
+            # Full MOR: urn:vmomi:Folder:{id}:{instance-uuid}
+            mor = f"urn:vmomi:Folder:{vpc_folder_id}"
+            if instance_uuid:
+                mor = f"{mor}:{instance_uuid}"
+
+            # The vSphere Client deep link for a plugin section uses the
+            # extension UID with tildes as separators (NOT dashes):
+            #   VC~com.vmware.nsx.management.nsxt.vpc~{ver}~navigable~plugin.vpc.ip.blocks
+            if plugin_version:
+                ext_uid = (f"VC~com.vmware.nsx.management.nsxt.vpc"
+                           f"~{plugin_version}~navigable~{nav_key}")
+            else:
+                ext_uid = f"VC~com.vmware.nsx.management.nsxt.vpc~navigable~{nav_key}"
+
+            url = (f"https://{vc_host}/ui/app/nsx-project;nav=n/{mor}"
+                   f"/configure/plugin/com.vmware.nsx.management.nsxt.vpc/{ext_uid}")
+            return jsonify({"url": url})
+    except Exception:
+        pass
+
+    return jsonify({"url": fallback_url})
 
 
 if __name__ == "__main__":

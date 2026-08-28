@@ -731,14 +731,57 @@
                             <i class="fas fa-circle-minus clr-info"         style="font-size:0.75rem;" x-show="check.status==='info'"></i>
                           </span>
 
-                          <!-- Step badge + name + message -->
+                          <!-- Step badge + name + check buttons + message -->
                           <div style="flex:1; min-width:0;">
+                            <!-- Title row: badge + name (full width, never compressed) -->
                             <div style="display:flex; align-items:center; gap:0.35rem; flex-wrap:wrap;">
                               <span class="step-badge" x-text="check.step === 'Auth' ? 'Auth' : 'S' + check.step"></span>
                               <p style="font-weight:700; font-size:0.85rem; color:#2b2b2b; line-height:1.3; margin:0;"
                                  x-text="check.name"></p>
                             </div>
-                            <p style="font-size:0.72rem; margin:0.12rem 0 0 1.5rem; line-height:1.3;"
+                            <!-- Check MTU button — S3, NSX columns only — left-aligned below title -->
+                            <div x-show="check.step === '3' && col.key !== 'vds_flb'"
+                                 style="display:flex; margin-top:0.25rem;">
+                              <button @click.stop="mtuModal.show = true; mtuModal.done = false; mtuModal.tests = []; mtuModal.error = null; mtuModal.summary = ''; mtuModal.colKey = col.key; fetchMtuHosts()"
+                                      class="fix-badge"
+                                      :style="{
+                                        color: '#fff',
+                                        background: mtuResult[col.key] === 'pass' ? '#48960c'
+                                                  : mtuResult[col.key] === 'fail' ? '#c92100'
+                                                  : '#89a0a8',
+                                        borderColor: mtuResult[col.key] === 'pass' ? '#48960c'
+                                                   : mtuResult[col.key] === 'fail' ? '#c92100'
+                                                   : '#89a0a8'
+                                      }">
+                                <i :class="mtuResult[col.key] === 'pass' ? 'fas fa-check-circle'
+                                          : mtuResult[col.key] === 'fail' ? 'fas fa-times-circle'
+                                          : 'fas fa-network-wired'"
+                                   style="margin-right:0.25rem;"></i>Check MTU
+                              </button>
+                            </div>
+                            <!-- Check VLAN button — S5-1 Distributed, only when S5-1..5-4 all green — left-aligned below title -->
+                            <template x-if="check.step === '5-1' && col.key === 'distributed' && ['5-1','5-2','5-3','5-4'].every(s => (modes['distributed']||[]).find(c => c.step === s)?.status === 'ok')">
+                              <div style="display:flex; margin-top:0.25rem;">
+                                <button @click.stop="openVlanModal()"
+                                        class="fix-badge"
+                                        :style="{
+                                          color: '#fff',
+                                          background: vlanResult === 'pass' ? '#48960c'
+                                                    : vlanResult === 'fail' ? '#c92100'
+                                                    : '#89a0a8',
+                                          borderColor: vlanResult === 'pass' ? '#48960c'
+                                                     : vlanResult === 'fail' ? '#c92100'
+                                                     : '#89a0a8'
+                                        }">
+                                  <i :class="vlanResult === 'pass' ? 'fas fa-check-circle'
+                                            : vlanResult === 'fail' ? 'fas fa-times-circle'
+                                            : 'fas fa-ethernet'"
+                                     style="margin-right:0.25rem;"></i>Check VLAN
+                                </button>
+                              </div>
+                            </template>
+                            <!-- Subtitle — always below any check buttons -->
+                            <p style="font-size:0.72rem; margin:0.18rem 0 0 1.5rem; line-height:1.3;"
                                :class="{ 'clr-ok': check.status==='ok', 'clr-warn': check.status==='warning', 'clr-error': check.status==='error', 'clr-info': check.status==='info' }"
                                x-text="check.message"></p>
                           </div>
@@ -747,47 +790,6 @@
                           <button x-show="check.can_fix && check.status === 'error'"
                                   @click.stop="check.expanded = true; $dispatch('fix-step', {step: check.step, mode: col.key})"
                                   class="fix-badge">Fix</button>
-
-                          <!-- Check VLAN button — S5-1 Distributed only, shown when steps 5-1..5-4 all green -->
-                          <template x-if="check.step === '5-1' && col.key === 'distributed'">
-                            <button @click.stop="openVlanModal()"
-                                    class="fix-badge"
-                                    :style="{
-                                      marginLeft: '0.15rem',
-                                      color: '#fff',
-                                      background: vlanResult === 'pass' ? '#48960c'
-                                                : vlanResult === 'fail' ? '#c92100'
-                                                : '#89a0a8',
-                                      borderColor: vlanResult === 'pass' ? '#48960c'
-                                                 : vlanResult === 'fail' ? '#c92100'
-                                                 : '#89a0a8'
-                                    }">
-                              <i :class="vlanResult === 'pass' ? 'fas fa-check-circle'
-                                        : vlanResult === 'fail' ? 'fas fa-times-circle'
-                                        : 'fas fa-ethernet'"
-                                 style="margin-right:0.25rem;"></i>Check VLAN
-                            </button>
-                          </template>
-
-                          <!-- Check MTU button — step 2, NSX columns only -->
-                          <button x-show="check.step === '3' && col.key !== 'vds_flb'"
-                                  @click.stop="mtuModal.show = true; mtuModal.done = false; mtuModal.tests = []; mtuModal.error = null; mtuModal.summary = ''; mtuModal.colKey = col.key; fetchMtuHosts()"
-                                  class="fix-badge"
-                                  :style="{
-                                    marginLeft: '0.15rem',
-                                    color: '#fff',
-                                    background: mtuResult[col.key] === 'pass' ? '#48960c'
-                                              : mtuResult[col.key] === 'fail' ? '#c92100'
-                                              : '#89a0a8',
-                                    borderColor: mtuResult[col.key] === 'pass' ? '#48960c'
-                                               : mtuResult[col.key] === 'fail' ? '#c92100'
-                                               : '#89a0a8'
-                                  }">
-                            <i :class="mtuResult[col.key] === 'pass' ? 'fas fa-check-circle'
-                                      : mtuResult[col.key] === 'fail' ? 'fas fa-times-circle'
-                                      : 'fas fa-network-wired'"
-                               style="margin-right:0.25rem;"></i>Check MTU
-                          </button>
 
                           <!-- Chevron -->
                           <span x-show="check.details" class="chevron" :class="check.expanded ? 'open' : ''">
@@ -809,6 +811,207 @@
                                      style="color:#0072a3; text-decoration:underline;"
                                      x-text="check.link.text"></a>.
                             </p>
+                          </template>
+
+                          <!-- "Open in vCenter" buttons — S2 (HA / DRS), all columns -->
+                          <template x-if="check.step === '2'">
+                            <div style="margin-top:0.55rem; display:flex; flex-direction:column; gap:0.25rem;">
+                              <!-- DRS link -->
+                              <button class="btn btn-sm btn-link"
+                                      style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;"
+                                      @click.stop="
+                                        fetch('/api/vc-cluster-page-url', {
+                                          method:'POST',
+                                          headers:{'Content-Type':'application/json'},
+                                          body: JSON.stringify({vc_url:form.vc_url, username:form.username, password:form.password, page:'drs'})
+                                        })
+                                        .then(r=>r.json())
+                                        .then(d=>{
+                                          let us = d.urls||[];
+                                          if(!us.length){ window.open(d.fallback||('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/'),'_blank'); return; }
+                                          us.forEach((u,i)=>setTimeout(()=>window.open(u.url,'_blank'),i*150));
+                                        })
+                                        .catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))
+                                      ">
+                                <i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(DRS)</span>
+                              </button>
+                              <!-- HA link -->
+                              <button class="btn btn-sm btn-link"
+                                      style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;"
+                                      @click.stop="
+                                        fetch('/api/vc-cluster-page-url', {
+                                          method:'POST',
+                                          headers:{'Content-Type':'application/json'},
+                                          body: JSON.stringify({vc_url:form.vc_url, username:form.username, password:form.password, page:'ha'})
+                                        })
+                                        .then(r=>r.json())
+                                        .then(d=>{
+                                          let us = d.urls||[];
+                                          if(!us.length){ window.open(d.fallback||('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/'),'_blank'); return; }
+                                          us.forEach((u,i)=>setTimeout(()=>window.open(u.url,'_blank'),i*150));
+                                        })
+                                        .catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))
+                                      ">
+                                <i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(HA)</span>
+                              </button>
+                            </div>
+                          </template>
+
+                          <!-- S4 Centralized: "Open in vCenter" (Edge Clusters) + "Open in NSX" (T0) -->
+                          <template x-if="check.step === '4' && col.key === 'centralized'">
+                            <div style="margin-top:0.55rem; display:flex; flex-direction:column; gap:0.3rem;">
+                              <button class="btn btn-sm btn-link"
+                                      style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;"
+                                      @click.stop="
+                                        fetch('/api/vc-vcenter-folder-plugin-url', {
+                                          method:'POST',
+                                          headers:{'Content-Type':'application/json'},
+                                          body: JSON.stringify({vc_url:form.vc_url, username:form.username, password:form.password,
+                                            nav_key:'plugin.network.connectivity.edge.clusters'})
+                                        })
+                                        .then(r=>r.json())
+                                        .then(d=>window.open(d.url||d.fallback,'_blank'))
+                                        .catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))
+                                      ">
+                                <i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(Edge Cluster)</span>
+                              </button>
+                              <button class="btn btn-sm btn-link"
+                                      style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;"
+                                      @click.stop="
+                                        let h = form.nsx_url.replace(/^https?:\/\//,'').replace(/\/+$/,'');
+                                        window.open('https://'+h+'/nsx/#/app/networks/providers/home/providers','_blank')
+                                      ">
+                                <i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in NSX <span style="opacity:0.7;">(Tier-0)</span>
+                              </button>
+                            </div>
+                          </template>
+
+                          <!-- "Open in vCenter" — S5-2 Dist + Cent (Transit Gateway) -->
+                          <template x-if="check.step === '5-2' && col.key !== 'vds_flb'">
+                            <div style="margin-top:0.55rem;">
+                              <button class="btn btn-sm btn-link"
+                                      style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;"
+                                      @click.stop="
+                                        fetch('/api/vc-tgw-url', {
+                                          method:'POST',
+                                          headers:{'Content-Type':'application/json'},
+                                          body: JSON.stringify({vc_url:form.vc_url, username:form.username, password:form.password,
+                                            tgw_name: check.tgw_name || ''})
+                                        })
+                                        .then(r=>r.json())
+                                        .then(d=>window.open(d.url||d.fallback,'_blank'))
+                                        .catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))
+                                      ">
+                                <i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(Trans. GW)</span>
+                              </button>
+                            </div>
+                          </template>
+
+                          <!-- "Open in vCenter" — S5-3 Dist + Cent (IP Blocks) -->
+                          <template x-if="check.step === '5-3' && col.key !== 'vds_flb'">
+                            <div style="margin-top:0.55rem;">
+                              <button class="btn btn-sm btn-link"
+                                      style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;"
+                                      @click.stop="
+                                        fetch('/api/vc-vpc-ipblocks-url', {
+                                          method:'POST',
+                                          headers:{'Content-Type':'application/json'},
+                                          body: JSON.stringify({vc_url:form.vc_url, username:form.username, password:form.password})
+                                        })
+                                        .then(r=>r.json())
+                                        .then(d=>window.open(d.url||d.fallback,'_blank'))
+                                        .catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))
+                                      ">
+                                <i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(Ext. IP Block)</span>
+                              </button>
+                            </div>
+                          </template>
+
+                          <!-- "Open in vCenter" — S5-4 Dist + Cent (VPC Connectivity Profile) -->
+                          <template x-if="check.step === '5-4' && col.key !== 'vds_flb'">
+                            <div style="margin-top:0.55rem;">
+                              <button class="btn btn-sm btn-link"
+                                      style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;"
+                                      @click.stop="
+                                        fetch('/api/vc-vpc-ipblocks-url', {
+                                          method:'POST',
+                                          headers:{'Content-Type':'application/json'},
+                                          body: JSON.stringify({vc_url:form.vc_url, username:form.username, password:form.password,
+                                            nav_key:'plugin.vpc.aggregated.connectivity.profile'})
+                                        })
+                                        .then(r=>r.json())
+                                        .then(d=>window.open(d.url||d.fallback,'_blank'))
+                                        .catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))
+                                      ">
+                                <i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(VPC Conn. Prof.)</span>
+                              </button>
+                            </div>
+                          </template>
+
+                          <!-- "Open in vCenter" — S5-1 Dist + Cent (External Connection) -->
+                          <template x-if="check.step === '5-1' && col.key !== 'vds_flb'">
+                            <div style="margin-top:0.55rem;">
+                              <button class="btn btn-sm btn-link"
+                                      style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3; text-align:left;"
+                                      @click.stop="
+                                        fetch('/api/vc-vcenter-folder-plugin-url', {
+                                          method:'POST',
+                                          headers:{'Content-Type':'application/json'},
+                                          body: JSON.stringify({vc_url:form.vc_url, username:form.username, password:form.password,
+                                            plugin:'vpc', nav_key:'plugin.vc.external.connection'})
+                                        })
+                                        .then(r=>r.json())
+                                        .then(d=>window.open(d.url||d.fallback,'_blank'))
+                                        .catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))
+                                      ">
+                                <i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(Ext. Conn.)</span>
+                              </button>
+                            </div>
+                          </template>
+
+                          <!-- "Open in vCenter" — S4 Distributed (VNA Clusters) -->
+                          <template x-if="check.step === '4' && col.key === 'distributed'">
+                            <div style="margin-top:0.55rem;">
+                              <button class="btn btn-sm btn-link"
+                                      style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3;"
+                                      @click.stop="
+                                        fetch('/api/vc-vcenter-folder-plugin-url', {
+                                          method:'POST',
+                                          headers:{'Content-Type':'application/json'},
+                                          body: JSON.stringify({vc_url:form.vc_url, username:form.username, password:form.password,
+                                            nav_key:'plugin.network.connectivity.vna.clusters'})
+                                        })
+                                        .then(r=>r.json())
+                                        .then(d=>window.open(d.url||d.fallback,'_blank'))
+                                        .catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))
+                                      ">
+                                <i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(VNA Cluster)</span>
+                              </button>
+                            </div>
+                          </template>
+
+                          <!-- "Open in vCenter" button — S3 (NSX Host Preparation), non-VDS modes -->
+                          <template x-if="check.step === '3' && col.key !== 'vds_flb'">
+                            <div style="margin-top:0.55rem;">
+                              <button class="btn btn-sm btn-link"
+                                      style="font-size:0.72rem; padding:0.15rem 0.45rem; color:#0072a3;"
+                                      @click.stop="
+                                        fetch('/api/vc-network-config-url', {
+                                          method:'POST',
+                                          headers:{'Content-Type':'application/json'},
+                                          body: JSON.stringify({vc_url:form.vc_url, username:form.username, password:form.password})
+                                        })
+                                        .then(r=>r.json())
+                                        .then(d=>{
+                                          let us = d.urls||[];
+                                          if(!us.length){ window.open(d.fallback||('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/'),'_blank'); return; }
+                                          us.forEach((u,i)=>setTimeout(()=>window.open(u.url,'_blank'),i*150));
+                                        })
+                                        .catch(()=>window.open('https://'+form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'')+'/ui/','_blank'))
+                                      ">
+                                <i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Open in vCenter <span style="font-weight:normal; opacity:0.75;">(NSX Host Prep)</span>
+                              </button>
+                            </div>
                           </template>
                         </div>
 
@@ -2609,7 +2812,7 @@
        x-transition:leave-end="opacity-0"
        class="modal" aria-hidden="false">
     <div class="modal-dialog" role="dialog" aria-modal="true"
-         style="max-width:660px; width:100%; display:flex; flex-direction:column;">
+         style="max-width:780px; width:100%; display:flex; flex-direction:column;">
       <div class="modal-content" style="display:flex; flex-direction:column;">
 
         <div class="modal-header">
@@ -2631,7 +2834,8 @@
             &nbsp;· Enable SSH temporarily if not already enabled<br>
             &nbsp;· Create a temp VMkernel interface in VLAN
               <span x-text="vlanModal.vlanId ? vlanModal.vlanId : '(from Dist. Ext. Connection)'"></span><br>
-            &nbsp;· Ping the VLAN gateway to verify VLAN connectivity<br>
+            &nbsp;· First ESX only: ping all IPs in the External IP Block (excl. excluded ranges) to detect conflicts<br>
+            &nbsp;· All ESX: ping the VLAN gateway to verify connectivity<br>
             &nbsp;· Remove the vmk and disable SSH again automatically
               (if SSH was already enabled, it will be left as-is)
           </div>
@@ -2706,24 +2910,63 @@
           <template x-if="vlanModal.done">
             <div>
               <!-- Summary banner -->
-              <div :style="{
-                  background: (vlanModal.error || vlanModal.tests.some(t => t.result !== 'pass')) ? '#fdf0f0' : '#f3fbf0',
-                  border: '1px solid ' + ((vlanModal.error || vlanModal.tests.some(t => t.result !== 'pass')) ? '#f5c2c2' : '#c6e8ae'),
+              <div x-data="{get hasFail() { return vlanModal.error || vlanModal.tests.some(t => t.result !== 'pass') || vlanModal.tests.some(t => t.conflict); },
+                            get conflicts() { return vlanModal.tests.filter(t => t.conflict).map(t => t.conflict); }}"
+                   :style="{
+                  background: hasFail ? '#fdf0f0' : '#f3fbf0',
+                  border: '1px solid ' + (hasFail ? '#f5c2c2' : '#c6e8ae'),
                   borderRadius: '3px', padding: '0.6rem 0.85rem', marginBottom: '0.75rem',
-                  fontSize: '0.85rem', fontWeight: '600'
+                  fontSize: '0.85rem'
                 }">
                 <template x-if="vlanModal.error">
-                  <span style="color:#c00;">
+                  <span style="color:#c00; font-weight:600;">
                     <i class="fas fa-times-circle" style="margin-right:0.3rem;"></i>
                     <span x-text="vlanModal.error"></span>
                   </span>
                 </template>
                 <template x-if="!vlanModal.error">
-                  <span :style="{color: vlanModal.tests.some(t => t.result !== 'pass') ? '#c00' : '#1a7a1a'}">
-                    <i :class="vlanModal.tests.some(t => t.result !== 'pass') ? 'fas fa-times-circle' : 'fas fa-check-circle'"
-                       style="margin-right:0.3rem;"></i>
-                    <span x-text="vlanModal.summary"></span>
-                  </span>
+                  <div>
+                    <div style="font-weight:600;" :style="{color: hasFail ? '#c00' : '#1a7a1a'}">
+                      <i :class="hasFail ? 'fas fa-times-circle' : 'fas fa-check-circle'"
+                         style="margin-right:0.3rem;"></i>
+                      <span x-text="vlanModal.summary"></span>
+                    </div>
+                    <!-- Conflict details inside the banner -->
+                    <template x-if="conflicts.length > 0">
+                      <div style="margin-top:0.5rem; padding:0.45rem 0.6rem;
+                                  background:#fffbe6; border:1px solid #f0d060;
+                                  border-radius:3px; font-weight:400; font-size:0.8rem;">
+                        <template x-for="(msg, ci) in conflicts" :key="ci">
+                          <div style="display:flex; align-items:flex-start; gap:0.35rem;"
+                               :style="{marginTop: ci > 0 ? '0.4rem' : '0'}">
+                            <i class="fas fa-exclamation-triangle"
+                               style="color:#a06000; margin-top:0.15rem; flex-shrink:0;"></i>
+                            <span style="color:#7a4000; white-space:pre-line;" x-text="msg"></span>
+                          </div>
+                        </template>
+                        <!-- Fix button: opens vCenter VPC > IP Blocks directly -->
+                        <div style="margin-top:0.6rem; display:flex; align-items:center; gap:0.5rem;">
+                          <button class="btn btn-warning btn-sm"
+                                  style="font-size:0.75rem; padding:0.2rem 0.55rem;"
+                                  @click.stop="
+                                    fetch('/api/vc-vpc-ipblocks-url', {
+                                      method: 'POST',
+                                      headers: {'Content-Type':'application/json'},
+                                      body: JSON.stringify({vc_url: form.vc_url, username: form.username, password: form.password})
+                                    })
+                                    .then(r => r.json())
+                                    .then(d => window.open(d.url, '_blank'))
+                                    .catch(() => window.open('https://' + form.vc_url.replace(/^https?:\/\//,'').replace(/\/+$/,'') + '/ui/', '_blank'))
+                                  ">
+                            <i class="fas fa-external-link-alt" style="margin-right:0.3rem;"></i>Fix in vCenter
+                          </button>
+                          <span style="color:#7a6000; font-size:0.72rem;">
+                            vCenter → Virtual Private Clouds → Configure → IP Blocks
+                          </span>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
                 </template>
               </div>
 
@@ -2741,38 +2984,37 @@
                         <th style="padding:0.35rem 0.5rem; text-align:center;">Result</th>
                       </tr>
                     </thead>
-                    <tbody>
                       <template x-for="(t, i) in vlanModal.tests" :key="i">
-                        <tr :style="{background: t.result === 'pass' ? 'transparent' : '#fff5f5',
-                                     borderBottom: '1px solid #dfe3e6'}">
-                          <td style="padding:0.3rem 0.5rem; font-family:monospace; font-size:0.77rem;"
-                              x-text="t.host"></td>
-                          <td style="padding:0.3rem 0.5rem; text-align:center; font-weight:600;"
-                              x-text="t.vlan_id"></td>
-                          <td style="padding:0.3rem 0.5rem; font-family:monospace; font-size:0.77rem;"
-                              x-text="t.temp_ip || '—'"></td>
-                          <td style="padding:0.3rem 0.5rem; font-family:monospace; font-size:0.77rem;"
-                              x-text="t.gateway || '—'"></td>
-                          <td style="padding:0.3rem 0.5rem; font-family:monospace; font-size:0.77rem;"
-                              x-text="t.vmk || '—'"></td>
-                          <td style="padding:0.3rem 0.5rem; text-align:center;">
-                            <span :style="{color: t.result === 'pass' ? '#1a7a1a' : '#c00',
-                                           fontWeight:'700', fontSize:'0.75rem'}"
-                                  x-text="t.result === 'pass' ? '✓ PASS' : '✗ FAIL'"></span>
-                          </td>
-                        </tr>
-                        <!-- Error / detail row — use x-show (not x-if) so Alpine.js
-                             reactivity works reliably inside x-for -->
-                        <tr x-show="t.error || (t.result !== 'pass' && t.output)"
-                            :style="{background: '#fff5f5', borderBottom: '1px solid #f5c2c2'}">
-                          <td colspan="6" style="padding:0.3rem 0.75rem;">
-                            <pre style="margin:0; font-size:0.73rem; color:#7a0000;
-                                        white-space:pre-wrap; word-break:break-all;"
-                                 x-text="t.error || t.output"></pre>
-                          </td>
-                        </tr>
+                        <tbody>
+                          <tr :style="{background: t.result === 'pass' ? 'transparent' : '#fff5f5',
+                                       borderBottom: '1px solid #dfe3e6'}">
+                            <td style="padding:0.3rem 0.5rem; font-family:monospace; font-size:0.77rem;"
+                                x-text="t.host"></td>
+                            <td style="padding:0.3rem 0.5rem; text-align:center; font-weight:600;"
+                                x-text="t.vlan_id"></td>
+                            <td style="padding:0.3rem 0.5rem; font-family:monospace; font-size:0.77rem;"
+                                x-text="t.temp_ip || '—'"></td>
+                            <td style="padding:0.3rem 0.5rem; font-family:monospace; font-size:0.77rem;"
+                                x-text="t.gateway || '—'"></td>
+                            <td style="padding:0.3rem 0.5rem; font-family:monospace; font-size:0.77rem;"
+                                x-text="t.vmk || '—'"></td>
+                            <td style="padding:0.3rem 0.5rem; text-align:center;">
+                              <span :style="{color: t.result === 'pass' ? '#1a7a1a' : '#c00',
+                                             fontWeight:'700', fontSize:'0.75rem'}"
+                                    x-text="t.result === 'pass' ? '✓ PASS' : '✗ FAIL'"></span>
+                            </td>
+                          </tr>
+                          <!-- Error / detail row -->
+                          <tr x-show="t.error || (t.result !== 'pass' && t.output)"
+                              :style="{background: '#fff5f5', borderBottom: '1px solid #f5c2c2'}">
+                            <td colspan="6" style="padding:0.3rem 0.75rem;">
+                              <pre style="margin:0; font-size:0.73rem; color:#7a0000;
+                                          white-space:pre-wrap; word-break:break-all;"
+                                   x-text="t.error || t.output"></pre>
+                            </td>
+                          </tr>
+                        </tbody>
                       </template>
-                    </tbody>
                   </table>
                 </div>
               </template>
@@ -3809,7 +4051,7 @@
           m.tests   = d.tests   || [];
           m.error   = d.error   || null;
           m.summary = d.summary || '';
-          this.vlanResult = (m.error || m.tests.some(t => t.result !== 'pass'))
+          this.vlanResult = (m.error || m.tests.some(t => t.result !== 'pass') || m.tests.some(t => t.conflict))
             ? 'fail' : 'pass';
         } catch(e) {
           m.error = String(e);
