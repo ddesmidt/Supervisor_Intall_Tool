@@ -81,6 +81,21 @@ Steps that the tool can remediate show a **"Fix"** button. Clicking it opens a g
 
 Steps the tool cannot automate (e.g. Edge Cluster + Tier-0 for Centralized mode) show an **info popup** with a link to the relevant VMware blog post.
 
+### Open in vCenter Links
+
+Most steps show a small **"Open in vCenter"** link button below the step title. Clicking it computes the exact vSphere Client deep link for the relevant page and opens it in a new browser tab — so you can jump directly to the right screen without navigating through the vCenter UI.
+
+| Step | What opens |
+|---|---|
+| S2 — vSphere HA / DRS | Cluster > Configure > DRS (and a second link for HA) for each cluster |
+| S3 — NSX Host Preparation | Cluster > Configure > Networking > Network Configuration for each cluster |
+| S4 Distributed | NSX VNA Clusters page |
+| S4 Centralized | NSX Edge Clusters page |
+| S5-1 | External Connections page |
+| S5-2 | Transit Gateway detail page (jumps to the specific TGW found by the check) |
+| S5-3 | VPC > Configure > IP Blocks |
+| S5-4 | VPC > Configure > Connectivity Profile |
+
 ### Check MTU Button
 
 S3 (NSX Host Preparation) shows a **"Check MTU"** button in the NSX columns. NSX overlay networking requires MTU ≥ 1700 on the physical fabric — use this to verify before deploying.
@@ -103,11 +118,12 @@ Clicking it opens a wizard that:
 1. Shows all ESX hosts; prompts for the root password (entering the first password copies it to all hosts)
 2. Creates a **temporary DVPortGroup** on the VDS with the connection's VLAN ID
 3. Adds a **temporary VMkernel NIC** to each host using an auto-picked IP from the connection subnet
-4. Pings the **VLAN gateway** from each VMkernel NIC
-5. Shows a per-host **pass / fail** result; the button turns green or red
-6. Removes all temporary VMkernel NICs and the temporary DVPortGroup automatically
+4. **Scans all IPs in the External IP Block** (excluding the gateway and already-excluded ranges) in parallel using `vmkping`, to detect any IPs that are already in use in the VLAN. Any responding IP is flagged as a conflict — it must be added to the "Excluded IP Ranges" of the IP Block so that Supervisor does not assign it to workloads.
+5. Pings the **VLAN gateway** from each VMkernel NIC
+6. Shows a per-host **pass / fail** result; conflicts are shown in a yellow warning box with a **"Fix in vCenter"** button that opens VPC > Configure > IP Blocks directly
+7. Removes all temporary VMkernel NICs and the temporary DVPortGroup automatically
 
-A failure indicates a physical switch VLAN tagging issue that must be resolved before proceeding.
+The button turns green (all hosts pass, no conflicts) or red (any host fails or conflicts detected). This confirms that physical switch VLAN tagging is correct and the IP Block exclusions are complete before deploying Supervisor.
 
 ---
 

@@ -84,6 +84,8 @@ Both HA and DRS (Fully Automated) are required for Supervisor.
 
 **Fix wizard (automated):** Calls `ReconfigureComputeResource_Task` via vCenter SOAP to enable HA and set DRS to `fullyAutomated` on the affected cluster. Polls the task until completion (up to 60 seconds).
 
+**Open in vCenter:** Two link buttons appear below the step title — **Open in vCenter (DRS)** and **Open in vCenter (HA)** — one per cluster. Each opens the corresponding Cluster > Configure > DRS (or HA) page directly in the vSphere Client.
+
 ---
 
 ## S3 — NSX Host Preparation
@@ -107,6 +109,8 @@ Both HA and DRS (Fully Automated) are required for Supervisor.
 If any host has issues the step shows ⚠️ Amber with a summary such as `3/4 hosts healthy — 1 host(s) with issues`, and the expanded detail shows the state and failure message for the affected host(s).
 
 **Fix:** Not automated — NSX host preparation is done via SDDC Manager or NSX Manager UI.
+
+**Open in vCenter:** An **"Open in vCenter (NSX Host Prep)"** link button appears below the step title. It opens Cluster > Configure > Networking > **Network Configuration** directly in the vSphere Client (one tab per cluster).
 
 **Check MTU button:**
 A **"Check MTU"** button appears on S3 for NSX columns. Clicking it opens a wizard that:
@@ -146,11 +150,15 @@ This step differs significantly between modes.
 4. Tool calls `PUT /…/virtual-network-appliance-clusters/vna-cluster-{n}` then `PUT /…/virtual-network-appliances/vna-node-{1,2}` (auto-picks a free cluster ID, skipping any recently deleted ones)
 5. Shows live deployment progress (polled every 30s)
 
+**Open in vCenter:** An **"Open in vCenter (VNA Cluster)"** link button appears below the step title, opening the NSX VNA Clusters page directly in the vSphere Client.
+
 ### S4 — Centralized: Edge Cluster + Tier-0
 
 **What it checks:** Are there Edge Clusters and Tier-0 gateways present in NSX (required for centralized routing)?
 
 **Fix:** **Not automated** — Edge Cluster + Tier-0 + BGP deployment is complex. An info popup links to the [VMware blog post with recorded installation demo](https://blogs.vmware.com/cloud-foundation/2025/06/25/vpc-centralized-network-connectivity-with-guided-edge-deployment/).
+
+**Open in vCenter:** An **"Open in vCenter (Edge Cluster)"** link button opens the NSX Edge Clusters page directly in the vSphere Client.
 
 ---
 
@@ -175,17 +183,18 @@ This step differs between modes.
 
 **Cascade mode:** The S5-1 fix wizard offers an optional **"Also auto-fix S5-2, S5-3, S5-4"** checkbox. When enabled, after S5-1 succeeds the tool automatically runs S5-2 (TGW attachment), S5-3 (External IP Block), and S5-4 (VPC Profile) in sequence, showing per-step progress. Steps that cannot run due to missing data (e.g. no VNA Cluster yet) are skipped with a warning.
 
+**Open in vCenter:** An **"Open in vCenter (Ext. Conn.)"** link button opens the External Connections page directly in the vSphere Client.
+
 **Check VLAN button:**
 Once S5-1 through S5-4 are all green, a **"Check VLAN"** button appears on S5-1 in the Distributed column. It verifies end-to-end VLAN reachability on every ESX host:
 
 1. Prompts for the root password of each ESX host (entering the first password auto-fills all others)
 2. Creates a temporary DVPortGroup on the VDS with the connection's VLAN ID
 3. Adds a temporary VMkernel NIC per ESX host using an auto-selected IP from the connection subnet (avoids gateway and any excluded ranges)
-4. Pings the VLAN gateway from each VMkernel NIC
-5. Reports a per-host pass/fail result
-6. Removes all temporary VMkernel NICs and destroys the temporary DVPortGroup
-
-The button turns green (all hosts pass) or red (any host fails). This confirms that physical switch VLAN tagging is correct before deploying Supervisor.
+4. **Scans all IPs in the External IP Block** (excluding the gateway and already-excluded ranges) in parallel batches of 200, using `vmkping` from the first ESX host. Any IP that responds is flagged as a conflict — it is already in use in the VLAN and must be added to the "Excluded IP Ranges" of the IP Block to prevent Supervisor from assigning it to workloads. Conflicts are shown in a yellow warning box with a **"Fix in vCenter → IP Blocks"** button.
+5. Pings the VLAN gateway from each VMkernel NIC
+6. Reports a per-host pass/fail result (green = all pass + no conflicts, red = any fail or conflict)
+7. Removes all temporary VMkernel NICs and destroys the temporary DVPortGroup
 
 ### S5-1 — Centralized: Centralized External Connection
 
@@ -200,6 +209,8 @@ The button turns green (all hosts pass) or red (any host fails). This confirms t
 ```
 
 **Fix wizard (automated):** Creates a new Gateway Connection — prompts for name and Tier-0 selection (the dropdown shows each Tier-0 with its associated Edge Cluster for easy identification).
+
+**Open in vCenter:** An **"Open in vCenter (Ext. Conn.)"** link button opens the External Connections page directly in the vSphere Client.
 
 ---
 
@@ -226,6 +237,8 @@ The button turns green (all hosts pass) or red (any host fails). This confirms t
 | Case 1 | Default TGW has no attachment | Attach Default TGW to a selected DVLAN connection |
 | Case 2 | Default TGW has a Centralized attachment | Create a new `dist-tgw1` TGW and attach it to a selected DVLAN connection |
 
+**Open in vCenter:** An **"Open in vCenter (Trans. GW)"** link button opens the Transit Gateway detail page directly in the vSphere Client, pre-navigating to the specific TGW found by the check.
+
 ### S5-2 — Centralized: Centralized Transit Gateway
 
 **What it checks:** Is there at least one TGW with an attachment pointing to a Gateway Connection?
@@ -240,6 +253,8 @@ The button turns green (all hosts pass) or red (any host fails). This confirms t
 The Edge Cluster is read from `GET /…/transit-gateways/{id}/centralized-configs` (auto-populated by NSX when the attachment is created).
 
 **Fix wizard — same Case 1/2 logic as Distributed**, but uses Gateway Connections instead.
+
+**Open in vCenter:** An **"Open in vCenter (Trans. GW)"** link button opens the Transit Gateway detail page in the vSphere Client, pre-navigating to the specific TGW found by the check.
 
 ---
 
@@ -269,6 +284,8 @@ Earlier versions of this check rejected RFC-1918 ranges (private IPs), but in la
 - CIDR is pre-filled from the TGW's DVLAN connection gateway subnet (read-only); if multiple DVLAN connections exist, a dropdown lets you choose which one to cover
 - Optional: enter comma-separated excluded IP ranges
 - Creates `PUT /policy/api/v1/infra/ip-blocks/{name}` with `visibility: EXTERNAL`
+
+**Open in vCenter:** An **"Open in vCenter (Ext. IP Block)"** link button opens VPC > Configure > **IP Blocks** directly in the vSphere Client.
 
 ---
 
@@ -318,6 +335,8 @@ Fully reactive form:
 - If the profile does not exist → `PUT` (create)
 - If the profile exists with the same TGW → `PATCH` (update fields only, no TGW change — NSX restriction)
 - If the profile exists with a different TGW → creates a new profile with a different ID (NSX does not allow changing `transit_gateway_path` on an existing profile)
+
+**Open in vCenter:** An **"Open in vCenter (VPC Conn. Prof.)"** link button opens VPC > Configure > **Connectivity Profile** directly in the vSphere Client.
 
 ---
 
