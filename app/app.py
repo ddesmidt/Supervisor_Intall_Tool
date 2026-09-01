@@ -1090,6 +1090,7 @@ def discover_install_options():
             "gateway": "", "prefix": 24, "dns_servers": [],
             "search_domains": [], "ntp_servers": [],
         },
+        "node_defaults": {},
         "nsx_project_path": "/orgs/default/projects/default",
         "vpc_connectivity_profile_path": (
             "/orgs/default/projects/default/vpc-connectivity-profiles/default"
@@ -1202,6 +1203,82 @@ def discover_install_options():
                             valid_nsx_projects[0]["valid_vpc_profiles"][0]["path"]
             except Exception:
                 result["valid_nsx_projects"] = []
+
+        # ── Node defaults (port group, gateway, DNS, NTP from VNA/Edge ETN) ──
+        try:
+            _ep = ("/policy/api/v1/infra/sites/default"
+                   "/enforcement-points/default")
+
+            # Collect VNA ETN IDs from all VNA clusters
+            _vna_etn_ids: set = set()
+            _vna_clusters = nsx_get(nsx_url, nsx_user, nsx_pass,
+                f"{_ep}/virtual-network-appliance-clusters")
+            for _vc in (_vna_clusters or {}).get("results", []):
+                for _m in _vc.get("members", []):
+                    _etn_id = (_m.get("edge_transport_node_path") or "").rstrip("/").split("/")[-1]
+                    if _etn_id:
+                        _vna_etn_ids.add(_etn_id)
+
+            # List all Policy ETNs
+            _all_etns = (nsx_get(nsx_url, nsx_user, nsx_pass,
+                f"{_ep}/edge-transport-nodes") or {}).get("results", [])
+
+            # portgroup id → name map from already-fetched port_groups
+            _pg_map = {pg.get("network", ""): pg.get("name", pg.get("network", ""))
+                       for pg in result.get("port_groups", [])}
+
+            def _etn_defaults(etn_id):
+                """Fetch a Policy ETN and extract management network info."""
+                _etn = nsx_get(nsx_url, nsx_user, nsx_pass,
+                    f"{_ep}/edge-transport-nodes/{etn_id}")
+                if not _etn:
+                    return None
+                _mi = _etn.get("management_interface", {})
+                _pg_id = _mi.get("network_id", "")
+                _specs = (_mi.get("ip_assignment_specs") or [{}])[0]
+                _gw    = (_specs.get("default_gateway") or [""])[0]
+                _snets = _specs.get("management_port_subnets") or [{}]
+                _pfx   = (_snets[0] if _snets else {}).get("prefix_length", 24)
+                _host  = _etn.get("hostname", "")
+                _parts = _host.split(".")
+                _domain = ".".join(_parts[1:]) if len(_parts) > 1 else ""
+                return {
+                    "pg_id":       _pg_id,
+                    "pg_name":     _pg_map.get(_pg_id, _pg_id),
+                    "gateway_cidr": f"{_gw}/{_pfx}" if _gw else "",
+                    "search_domain": _domain,
+                }
+
+            # Shared DNS/NTP from NSX manager
+            _dns_r  = nsx_get(nsx_url, nsx_user, nsx_pass, "/api/v1/node/network/name-servers")
+            _nsx_dns = (_dns_r.get("name_servers") if _dns_r else []) or []
+            _ntp_r  = nsx_get(nsx_url, nsx_user, nsx_pass, "/api/v1/node/services/ntp")
+            _nsx_ntp = ((_ntp_r.get("service_properties") or {}).get("servers")
+                        if _ntp_r else []) or []
+
+            _nd: dict = {}
+
+            # Distributed: first VNA ETN
+            _vna_etn = next((e for e in _all_etns if e.get("id") in _vna_etn_ids), None)
+            if _vna_etn:
+                _d = _etn_defaults(_vna_etn["id"])
+                if _d:
+                    _d["dns"] = _nsx_dns
+                    _d["ntp"] = _nsx_ntp
+                    _nd["distributed"] = _d
+
+            # Centralized: first ETN NOT in any VNA cluster
+            _cent_etn = next((e for e in _all_etns if e.get("id") not in _vna_etn_ids), None)
+            if _cent_etn:
+                _d = _etn_defaults(_cent_etn["id"])
+                if _d:
+                    _d["dns"] = _nsx_dns
+                    _d["ntp"] = _nsx_ntp
+                    _nd["centralized"] = _d
+
+            result["node_defaults"] = _nd
+        except Exception:
+            result["node_defaults"] = {}
 
     except requests.HTTPError as e:
         result["error"] = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
@@ -1938,6 +2015,70 @@ def _consolidate_ip_ranges(items):
     ranges.append({"start": str(_ip.ip_address(start)),
                    "end":   str(_ip.ip_address(end))})
     return ranges
+
+
+def _get_vpc_allocated_ips(nsx_url: str, user: str, pwd: str,
+                           block_cidr: str) -> set:
+    """Return the set of IPs (strings) from *block_cidr* that NSX VPC has
+    already allocated for NAT SNAT rules or LoadBalancer VIPs.
+
+    These IPs are legitimately in use by deployed Supervisors/VPCs and
+    must NOT be flagged as VLAN conflicts during the Check-VLAN pre-scan.
+    """
+    try:
+        block_net = ipaddress.ip_network(block_cidr, strict=False)
+        allocated: set = set()
+
+        projs = (nsx_get(nsx_url, user, pwd,
+                         "/policy/api/v1/orgs/default/projects") or {}).get(
+            "results", [{"id": "default"}])
+
+        for proj in projs:
+            pid = proj.get("id", "default")
+            vpcs = (nsx_get(nsx_url, user, pwd,
+                            f"/policy/api/v1/orgs/default/projects/{pid}/vpcs") or {}).get(
+                "results", [])
+            for vpc in vpcs:
+                vid = vpc.get("id", "")
+                if not vid:
+                    continue
+
+                # SNAT rules — translated_network holds the outbound NAT IP
+                for section in ("USER", "GATEWAY"):
+                    try:
+                        nat = nsx_get(nsx_url, user, pwd,
+                            f"/policy/api/v1/orgs/default/projects/{pid}"
+                            f"/vpcs/{vid}/nat/{section}/nat-rules") or {}
+                        for rule in nat.get("results", []):
+                            trans = (rule.get("translated_network") or "").split("/")[0]
+                            if trans:
+                                try:
+                                    if ipaddress.ip_address(trans) in block_net:
+                                        allocated.add(trans)
+                                except ValueError:
+                                    pass
+                    except Exception:
+                        pass
+
+                # LoadBalancer virtual server IPs
+                try:
+                    lbs = nsx_get(nsx_url, user, pwd,
+                        f"/policy/api/v1/orgs/default/projects/{pid}"
+                        f"/vpcs/{vid}/load-balancer-virtual-servers") or {}
+                    for vs in lbs.get("results", []):
+                        ip = vs.get("ip_address", "")
+                        if ip:
+                            try:
+                                if ipaddress.ip_address(ip) in block_net:
+                                    allocated.add(ip)
+                            except ValueError:
+                                pass
+                except Exception:
+                    pass
+
+        return allocated
+    except Exception:
+        return set()
 
 
 # ── Fix: fetch all NSX state needed for S4-S7 wizards ────────────────────────
@@ -3282,7 +3423,7 @@ def _pcli_setup_vlan_test(vc_url, vc_user, vc_pass, vds_name, pg_name, vlan_id, 
     Returns (vmk_map, pg_created, error_str)
       vmk_map: {fqdn: vmk_name}
     """
-    import subprocess, tempfile, os, textwrap
+    import subprocess, tempfile, os, textwrap, re
     vc_host = vc_url.replace("https://", "").replace("http://", "").rstrip("/")
 
     per_host_lines = []
@@ -3299,16 +3440,29 @@ def _pcli_setup_vlan_test(vc_url, vc_user, vc_pass, vds_name, pg_name, vlan_id, 
     if pg_already_exists:
         pg_block = f"$pg = Get-VDPortgroup -Name '{pg_name}'"
     else:
-        pg_block = (f"Get-VDPortgroup -Name '{pg_name}' -ErrorAction SilentlyContinue"
-                    f" | Remove-VDPortgroup -Confirm:$false\n"
-                    f"        $pg = New-VDPortgroup -VDSwitch $vds -Name '{pg_name}'"
-                    f" -VlanId {vlan_id} -NumPorts 16\n"
-                    f"        Write-Host \"PG:CREATED:{pg_name}\"\n"
-                    f"        Start-Sleep -Seconds 3")
+        # Before creating the PG, clean up any leftover from a previous run:
+        # remove vmknics on every host that still use the old PG, then delete it.
+        pg_block = textwrap.dedent(f"""\
+            $old_pg = Get-VDPortgroup -Name '{pg_name}' -ErrorAction SilentlyContinue
+            if ($old_pg) {{
+                foreach ($vmh in (Get-VMHost -ErrorAction SilentlyContinue)) {{
+                    try {{
+                        Get-VMHostNetworkAdapter -VMHost $vmh -PortGroup $old_pg -ErrorAction SilentlyContinue |
+                            Remove-VMHostNetworkAdapter -Confirm:$false
+                    }} catch {{}}
+                }}
+                Start-Sleep -Seconds 2
+                $old_pg | Remove-VDPortgroup -Confirm:$false
+            }}
+            $pg = New-VDPortgroup -VDSwitch $vds -Name '{pg_name}' -VlanId {vlan_id} -NumPorts 16
+            Write-Host "PG:CREATED:{pg_name}"
+            Start-Sleep -Seconds 3""")
 
     script = textwrap.dedent(f"""\
-        $ErrorActionPreference = 'Stop'
+        $ErrorActionPreference = 'SilentlyContinue'
+        Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false -Confirm:$false | Out-Null
         Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false -Scope Session | Out-Null
+        $ErrorActionPreference = 'Stop'
         Connect-VIServer -Server '{vc_host}' -User '{vc_user}' -Password '{vc_pass}' -Force | Out-Null
         $vds = Get-VDSwitch -Name '{vds_name}'
         {pg_block}
@@ -3322,6 +3476,8 @@ def _pcli_setup_vlan_test(vc_url, vc_user, vc_pass, vds_name, pg_name, vlan_id, 
         r = subprocess.run(["pwsh", "-NonInteractive", "-File", script_path],
                            capture_output=True, text=True, timeout=150)
         out = r.stdout + r.stderr
+        # Strip ANSI escape codes so error messages are readable
+        out = re.sub(r'\x1b\[[0-9;]*[mGKHF]', '', out)
         if "PCLI_SETUP_DONE" not in out:
             return {}, False, f"PowerCLI setup failed (no DONE marker):\n{out[:800]}"
         pg_created = "PG:CREATED:" in out
@@ -3348,6 +3504,7 @@ def _pcli_cleanup_vlan_test(vc_url, vc_user, vc_pass, pg_name, host_fqdns):
     host_array = ", ".join(f"\'{h}\'" for h in host_fqdns)
     script = textwrap.dedent(f"""\
         $ErrorActionPreference = 'SilentlyContinue'
+        Set-PowerCLIConfiguration -Scope User -ParticipateInCEIP $false -Confirm:$false | Out-Null
         Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:$false -Scope Session | Out-Null
         Connect-VIServer -Server '{vc_host}' -User '{vc_user}' -Password '{vc_pass}' -Force | Out-Null
         $pg = Get-VDPortgroup -Name '{pg_name}' -ErrorAction SilentlyContinue
@@ -3521,7 +3678,18 @@ def check_vlan():
         # Scan ALL IPs in block (excl. gateway, excl_ranges, host-0's own IP).
         # No other vmknics exist yet → every RESPOND is a real server.
         _block_net_obj = _ip.ip_network(block_cidr, strict=False)
-        _scan_excl_pre = _excl_set | {_gw_addr, _ip.ip_address(temp_ips[0])}
+
+        # Collect IPs already allocated by NSX VPC (NAT SNAT + LB VIPs).
+        # These are legitimately in use — skip them during the pre-scan to
+        # avoid false "conflict" warnings.
+        _nsx_alloc_ips: set = set()
+        try:
+            _raw_alloc = _get_vpc_allocated_ips(nsx_url, nsx_user, nsx_pass, block_cidr)
+            _nsx_alloc_ips = {_ip.ip_address(a) for a in _raw_alloc}
+        except Exception:
+            pass
+
+        _scan_excl_pre = _excl_set | {_gw_addr, _ip.ip_address(temp_ips[0])} | _nsx_alloc_ips
         _prescan_ips = [
             str(_ip.ip_address(h))
             for h in range(int(_block_net_obj.network_address) + 1,
@@ -3535,8 +3703,10 @@ def check_vlan():
         _vmk0 = vmk_map.get(hosts[0])
 
         if _prescan_ips and _vmk0:
+            _alloc_note = (f", {len(_nsx_alloc_ips)} NSX VPC-allocated IPs skipped"
+                           if _nsx_alloc_ips else "")
             _prescan_steps.append(
-                f"Scanning {len(_prescan_ips)} IPs in {block_cidr} for conflicts…")
+                f"Scanning {len(_prescan_ips)} IPs in {block_cidr} for conflicts{_alloc_note}…")
             _pssh = None
             try:
                 _pok, _pstate = _vc_manage_ssh(vc_url, vc_user, vc_pass, hosts[0], True)
@@ -3760,6 +3930,50 @@ def check_vlan():
         result["ip_block_name"] = ip_block_name
         result["ip_block_path"] = ip_block_path
         result["conflict_ips"]  = list(_conflict_ips)
+
+        # ── Compute available IP ranges for Supervisor ──────────────────────
+        # "Available for Supervisor" = all block IPs minus:
+        #   · gateway
+        #   · explicit NSX excluded_ips (admin-configured)
+        #   · genuine IP conflicts detected during pre-scan (real other devices)
+        # NOT excluded: reserved_in_subnet (those are test-only reservations, NSX
+        # can and does allocate subnet+3 etc. to workloads) and _nsx_alloc_ips
+        # (those are already Supervisor's own allocations — still part of its pool).
+        try:
+            _blk_net = ipaddress.ip_network(block_cidr, strict=False)
+            _all_excl = (
+                _excl_set
+                | {_gw_addr}
+                | {ipaddress.ip_address(c) for c in _conflict_ips}
+            )
+            _avail: list = []   # list of (start_int, end_int) consecutive ranges
+            _run_start = _run_end = None
+            for _h in range(int(_blk_net.network_address) + 1,
+                            int(_blk_net.broadcast_address)):
+                _haddr = ipaddress.ip_address(_h)
+                if _haddr in _all_excl:
+                    if _run_start is not None:
+                        _avail.append((_run_start, _run_end))
+                        _run_start = _run_end = None
+                else:
+                    if _run_start is None:
+                        _run_start = _run_end = _h
+                    else:
+                        _run_end = _h
+            if _run_start is not None:
+                _avail.append((_run_start, _run_end))
+
+            def _fmt_range(s, e):
+                return (str(ipaddress.ip_address(s))
+                        if s == e
+                        else f"{ipaddress.ip_address(s)}-{ipaddress.ip_address(e)}")
+
+            result["available_ranges"] = [_fmt_range(s, e) for s, e in _avail]
+            result["available_count"]  = sum(e - s + 1 for s, e in _avail)
+        except Exception:
+            result["available_ranges"] = []
+            result["available_count"]  = 0
+
         if gw_ok and not conflicts:
             result["summary"] = f"{passed}/{total} host(s) passed VLAN {vlan_id} connectivity test"
         elif gw_ok and conflicts:

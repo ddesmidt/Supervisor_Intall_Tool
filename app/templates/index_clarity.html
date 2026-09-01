@@ -430,9 +430,15 @@
                   <label>NSX Username</label>
                   <input type="text" x-model="form.nsx_user" placeholder="admin">
                 </div>
-                <div class="conn-field">
+                <div class="conn-field" style="position:relative;">
                   <label>NSX Password</label>
-                  <input type="password" x-model="form.nsx_pass">
+                  <input :type="showNsxPwd ? 'text' : 'password'" x-model="form.nsx_pass"
+                         style="padding-right:18px;">
+                  <button @click="showNsxPwd = !showNsxPwd" type="button"
+                          style="position:absolute;right:2px;bottom:3px;background:none;border:none;cursor:pointer;padding:0;line-height:1;">
+                    <i :class="showNsxPwd ? 'fas fa-eye-slash' : 'fas fa-eye'"
+                       style="color:#6e777b; font-size:11px;"></i>
+                  </button>
                 </div>
               </div>
 
@@ -443,12 +449,6 @@
                         class="btn btn-primary btn-sm">
                   <i :class="loadingInstalled ? 'fas fa-circle-notch fa-spin' : 'fas fa-magnifying-glass'"></i>
                   <span x-text="loadingInstalled ? 'Checking…' : 'Check if Supervisor is Installed'"></span>
-                </button>
-
-                <button @click="checkRequirements()" x-show="showReqBtn" x-cloak
-                        :disabled="loading" class="btn btn-success btn-sm fade-in">
-                  <i :class="loadingReq ? 'fas fa-circle-notch fa-spin' : 'fas fa-clipboard-check'"></i>
-                  <span x-text="loadingReq ? 'Checking…' : 'Check Supervisor Requirements'"></span>
                 </button>
 
                 <button x-show="installResult || hasResults()" @click="reset()"
@@ -567,8 +567,8 @@
             </template>
           </div>
 
-          <!-- ── Deployment Options Info (when Supervisor is RUNNING) ──── -->
-          <template x-if="installResult && installResult.installed && installResult.clusters.length">
+          <!-- ── Deployment Options Info (when Supervisor is RUNNING, before requirements check) ──── -->
+          <template x-if="installResult && installResult.installed && installResult.clusters.length && !hasResults()">
             <div class="fade-in" style="margin-bottom:1.2rem;">
               <!-- Section title + toggle -->
               <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.65rem;">
@@ -584,7 +584,8 @@
               </div>
 
               <!-- 3 columns — only Pros/Cons/Requirements, no steps, no deploy -->
-              <div x-show="showModeInfo" class="req-cols">
+              <!-- Hidden once requirements results are available (to avoid duplicates) -->
+              <div x-show="showModeInfo && !hasResults()" class="req-cols">
                 <template x-for="col in [
                   { key: 'distributed', label: 'NSX-VPC\u00a0Distributed', badge: 'Simple \u00b7 Recommended', icon: 'fa-network-wired', mode: 'NSX-VPC Distributed' },
                   { key: 'centralized', label: 'NSX-VPC\u00a0Centralized', badge: 'Advanced',                  icon: 'fa-circle-nodes',  mode: 'NSX-VPC Centralized' },
@@ -623,7 +624,7 @@
 
                       <!-- Distributed -->
                       <div x-show="col.key === 'distributed'">
-                        <img src="/static/nsx-vpc-distributed.jpg"
+                        <img src="/static/nsx-vpc-distributed.jpg?v=3"
                              alt="NSX-VPC Distributed Architecture"
                              title="Click to enlarge"
                              @click="showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
@@ -669,6 +670,13 @@
 
           <!-- ── Requirements Results ───────────────────────────── -->
           <div x-show="hasResults()" x-cloak class="fade-in">
+            <!-- Section header (title only — Re-check button lives in the steps panel header) -->
+            <div style="margin-bottom:0.75rem;">
+              <span style="font-size:0.82rem; font-weight:600; color:#2b2b2b;">
+                <i class="fas fa-table-columns" style="color:#0072a3; margin-right:0.35rem;"></i>
+                Deployment Options — Pros / Cons / Requirements
+              </span>
+            </div>
             <div class="req-cols">
               <template x-for="col in [
                 { key: 'distributed', label: 'NSX-VPC Distributed', badge: 'Simple \u00b7 Recommended', icon: 'fa-network-wired' },
@@ -703,7 +711,7 @@
                   <div class="pros-cons-section">
                     <!-- Distributed -->
                     <div x-show="col.key === 'distributed'">
-                      <img src="/static/nsx-vpc-distributed.jpg"
+                      <img src="/static/nsx-vpc-distributed.jpg?v=3"
                            alt="NSX-VPC Distributed Architecture"
                            title="Click to enlarge"
                            @click="showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
@@ -1055,7 +1063,7 @@
                              style="cursor:pointer; accent-color:#0072a3; width:0.85rem; height:0.85rem; flex-shrink:0;">
                       <span style="font-size:0.73rem; font-weight:600;"
                             :style="selectedMode === col.key ? 'color:#004980;' : 'color:#4a5568;'"
-                            x-text="selectedMode === col.key ? 'Viewing steps ▼' : 'View steps'"></span>
+                            x-text="selectedMode === col.key ? 'Viewing Requirement Steps ▼' : 'View Requirement Steps'"></span>
                     </label>
                     <!-- Status + Deploy row -->
                     <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -1109,10 +1117,18 @@
                       <span style="font-size:0.78rem; font-weight:700; text-transform:uppercase; letter-spacing:.03em;" x-text="col.label"></span>
                       <span class="label" style="font-size:0.58rem; padding:0.1rem 0.35rem;" x-text="col.badge"></span>
                     </div>
-                    <span class="status-chip"
-                          :class="{ ready: overallFor(col.key)==='ready', warnings: overallFor(col.key)==='warnings', issues: overallFor(col.key)==='issues', to_validate: overallFor(col.key)==='to_validate' }"
-                          x-text="{ ready:'Ready', warnings:'Warnings', issues:'Issues', to_validate:'To Validate' }[overallFor(col.key)] || ''">
-                    </span>
+                    <div style="display:flex; align-items:center; gap:0.65rem;">
+                      <button @click="checkRequirements()" :disabled="loadingReq"
+                              class="btn btn-success btn-sm"
+                              style="font-size:0.72rem; padding:0.18rem 0.6rem;">
+                        <i :class="loadingReq ? 'fas fa-circle-notch fa-spin' : 'fas fa-rotate-right'" style="margin-right:0.25rem;"></i>
+                        <span x-text="loadingReq ? 'Checking…' : 'Re-check Requirements'"></span>
+                      </button>
+                      <span class="status-chip"
+                            :class="{ ready: overallFor(col.key)==='ready', warnings: overallFor(col.key)==='warnings', issues: overallFor(col.key)==='issues', to_validate: overallFor(col.key)==='to_validate' }"
+                            x-text="{ ready:'Ready', warnings:'Warnings', issues:'Issues', to_validate:'To Validate' }[overallFor(col.key)] || ''">
+                      </span>
+                    </div>
                   </div>
 
                   <!-- Step rows (same template as columns) -->
@@ -1192,7 +1208,7 @@
           </div><!-- /requirements results -->
 
           <!-- ── Deploy Wizard ──────────────────────────────────── -->
-          <div x-show="showInstallWizard" x-cloak class="fade-in" style="margin-top:1.2rem;">
+          <div id="deploy-wizard-anchor" x-show="showInstallWizard" x-cloak class="fade-in" style="margin-top:1.2rem;">
             <div class="card" style="border-top:3px solid #0072a3;">
 
               <!-- Wizard header -->
@@ -1332,7 +1348,10 @@
                 </p>
 
                 <div class="clr-form-control" style="margin-bottom:0.7rem;">
-                  <label class="clr-control-label" style="font-size:0.68rem;">Management Port Group (Distributed)</label>
+                  <label class="clr-control-label" style="font-size:0.68rem;">
+                    Management Port Group
+                    <span style="font-weight:normal; color:#6e777b;" x-text="'(' + (wizardDeployMode==='centralized' ? 'Centralized' : 'Distributed') + ')'"></span>
+                  </label>
                   <div class="clr-control-container"><div class="clr-select-wrapper">
                     <select x-model="wizardConfig.port_group_id" class="clr-select">
                       <option value="">— Select port group —</option>
@@ -1341,6 +1360,11 @@
                       </template>
                     </select>
                   </div></div>
+                  <p x-show="wizardConfig.port_group_id && wizardConfig.port_group_name"
+                     style="font-size:0.68rem; color:#48960c; margin:0.2rem 0 0 0;">
+                    <i class="fas fa-check-circle" style="margin-right:0.25rem;"></i>
+                    Auto-discovered from <span x-text="wizardDeployMode==='centralized' ? 'Edge node' : 'VNA node'"></span>
+                  </p>
                 </div>
 
                 <div class="clr-row">
@@ -3087,6 +3111,15 @@
                          style="margin-right:0.3rem;"></i>
                       <span x-text="vlanModal.summary"></span>
                     </div>
+                    <!-- Available IP ranges — shown only on clean success -->
+                    <template x-if="!hasFail && vlanModal.result && (vlanModal.result.available_ranges || []).length > 0">
+                      <div style="margin-top:0.45rem; font-size:0.8rem; font-weight:600; color:#1a7a1a;">
+                        <i class="fas fa-check-circle" style="margin-right:0.3rem;"></i>
+                        <strong x-text="'External IP Block (' + (vlanModal.result.ip_block_name || '') + ')'"></strong>
+                        <span style="font-weight:400;"
+                              x-text="' \u2014 ' + vlanModal.result.available_count + ' IP(s) available for Supervisor (' + (vlanModal.result.available_ranges || []).join(', ') + ')'"></span>
+                      </div>
+                    </template>
                     <!-- Conflict details inside the banner -->
                     <template x-if="conflicts.length > 0">
                       <div style="margin-top:0.5rem; padding:0.45rem 0.6rem;
@@ -3240,7 +3273,7 @@
             </button>
           </template>
           <template x-if="vlanModal.done">
-            <button @click="vlanModal.done = false; vlanModal.tests = []; vlanModal.error = null; vlanModal.summary = ''"
+            <button @click="vlanModal.done = false; vlanModal.tests = []; vlanModal.error = null; vlanModal.summary = ''; vlanModal.result = null"
                     class="btn btn-outline btn-sm">
               <i class="fas fa-redo" style="margin-right:0.3rem;"></i>Run Again
             </button>
@@ -3268,6 +3301,7 @@
       },
       showNsx:        false,
       showPwd:        false,
+      showNsxPwd:     false,
       loading:        false,
       loadingInstalled: false,
       loadingReq:     false,
@@ -3304,6 +3338,7 @@
         tests: [], error: null, summary: '',
         vlanId: '',         // filled from modes.distributed S5-1 details when modal opens
         ip_block_name: '', ip_block_path: '', conflict_ips: [],
+        result: null,       // full API response (available_ranges, available_count, …)
         autoFixLoading: false, autoFixDone: false, autoFixError: null
       },
       vlanResult: null,   // null | 'pass' | 'fail'
@@ -3423,6 +3458,9 @@
           this.installResult = d;
           if (d.success && !d.installed) this.showReqBtn = true;
           if (d.success && d.installed) this.equalizeColRows();
+          // Auto-run requirements check whenever we have a successful connection,
+          // so "View Requirement Steps" (Check MTU / Check VLAN) is always available.
+          if (d.success && this.form.nsx_url) this.checkRequirements();
         } catch (e) {
           this.installResult = {error: String(e)};
         } finally {
@@ -3465,13 +3503,17 @@
         this.showInstallWizard = true;
         this.wizardStep   = 0;
         this.wizardLoading = true;
+        this.$nextTick(() => {
+          const el = document.getElementById('deploy-wizard-anchor');
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
         this.wizardOptions = null;
         this.wizardResult  = null;
         this.deployStatus  = null;
         this.wizardDeployMode = deployMode || 'distributed';
         this.wizardConfig  = {
           cluster_moref: '', cluster_name: '',
-          port_group_id: '',
+          port_group_id: '', port_group_name: '',
           first_ip: '', gateway_cidr: '',
           dns_servers: '', search_domains: '', ntp_servers: '',
           storage_policy_uuid: '', storage_policy_name: '',
@@ -3496,20 +3538,39 @@
               this.wizardConfig.cluster_moref = clusters[0].cluster;
               this.wizardConfig.cluster_name  = clusters[0].name;
             }
-            const def = d.vc_defaults || {};
-            if (def.dns_servers && def.dns_servers.length)
-              this.wizardConfig.dns_servers = def.dns_servers.join(', ');
-            if (def.search_domains && def.search_domains.length)
-              this.wizardConfig.search_domains = def.search_domains.join(', ');
-            if (def.ntp_servers && def.ntp_servers.length)
-              this.wizardConfig.ntp_servers = def.ntp_servers.join(', ');
-            if (def.gateway)
-              this.wizardConfig.gateway_cidr = def.gateway;
+            // Prefer node-derived defaults (VNA for distributed, Edge for centralized)
+            // over vCenter appliance defaults — smarter for workload domains.
+            const dMode = this.wizardDeployMode || 'distributed';
+            const nodeD = (d.node_defaults || {})[dMode] || null;
+            const vcD   = d.vc_defaults || {};
+            if (nodeD) {
+              if (nodeD.pg_id) {
+                this.wizardConfig.port_group_id   = nodeD.pg_id;
+                this.wizardConfig.port_group_name = nodeD.pg_name || nodeD.pg_id;
+              }
+              if (nodeD.gateway_cidr)
+                this.wizardConfig.gateway_cidr = nodeD.gateway_cidr;
+              if (nodeD.dns && nodeD.dns.length)
+                this.wizardConfig.dns_servers = nodeD.dns.join(', ');
+              if (nodeD.ntp && nodeD.ntp.length)
+                this.wizardConfig.ntp_servers = nodeD.ntp.join(', ');
+              if (nodeD.search_domain)
+                this.wizardConfig.search_domains = nodeD.search_domain;
+            } else {
+              // Fallback to vCenter appliance values
+              if (vcD.dns_servers && vcD.dns_servers.length)
+                this.wizardConfig.dns_servers = vcD.dns_servers.join(', ');
+              if (vcD.search_domains && vcD.search_domains.length)
+                this.wizardConfig.search_domains = vcD.search_domains.join(', ');
+              if (vcD.ntp_servers && vcD.ntp_servers.length)
+                this.wizardConfig.ntp_servers = vcD.ntp_servers.join(', ');
+              if (vcD.gateway)
+                this.wizardConfig.gateway_cidr = vcD.gateway;
+            }
             // Suggest name from vCenter hostname
             const host = this.form.vc_url.replace(/^https?:\/\//, '').split('.')[0];
             this.wizardConfig.name = 'supervisor-' + host.replace(/^vc-?/, '');
             // Build valid NSX projects list using S7 step for the selected deploy mode
-            const dMode = this.wizardDeployMode || 'distributed';
             const s7Step = (this.modes[dMode] || []).find(s => s.step === '5-4');
             const vcpsFromS7 = (s7Step && s7Step.valid_vcps_for_deploy) || null;
             const validProjs = vcpsFromS7 || d.valid_nsx_projects || [];
@@ -4286,12 +4347,13 @@
             })
           });
           const d = await r.json();
-          m.tests         = d.tests         || [];
-          m.error         = d.error         || null;
-          m.summary       = d.summary       || '';
-          m.ip_block_name = d.ip_block_name || '';
-          m.ip_block_path = d.ip_block_path || '';
-          m.conflict_ips  = d.conflict_ips  || [];
+          m.tests            = d.tests            || [];
+          m.error            = d.error            || null;
+          m.summary          = d.summary          || '';
+          m.ip_block_name    = d.ip_block_name    || '';
+          m.ip_block_path    = d.ip_block_path    || '';
+          m.conflict_ips     = d.conflict_ips     || [];
+          m.result           = d;                          // full response for available_ranges etc.
           m.autoFixLoading = false; m.autoFixDone = false; m.autoFixError = null;
           this.vlanResult = (m.error || m.tests.some(t => t.result !== 'pass') || m.tests.some(t => t.conflict))
             ? 'fail' : 'pass';
@@ -4528,7 +4590,7 @@
                        font-size:1rem; font-weight:700; line-height:1; padding:0 2px;
                        opacity:0.85;" aria-label="Close">×</button>
       </div>
-      <img src="/static/nsx-vpc-distributed.jpg"
+      <img src="/static/nsx-vpc-distributed.jpg?v=3"
            alt="NSX-VPC Distributed Architecture"
            style="max-width:56vw; max-height:84vh; border-radius:0 0 6px 6px;
                   box-shadow:0 12px 48px rgba(0,0,0,0.55); display:block;
