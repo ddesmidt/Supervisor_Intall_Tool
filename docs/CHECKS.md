@@ -204,9 +204,9 @@ The check runs in three phases:
 - Temp IPs are auto-selected from the External IP Block subnet, skipping: the gateway, any already-excluded ranges, and three commonly-reserved addresses (`subnet+2`, `subnet+3`, `broadcast-1`, often used by HSRP/VRRP)
 
 **Phase 2 — IP conflict scan (from host 0)**
-- SSH to host 0, then scan **every IP in the External IP Block** (excluding: gateway, already-excluded ranges, and host 0's own temp IP) using `vmkping -c 1 -W 1`, in parallel batches of 200
+- SSH to host 0, then scan **every IP in the External IP Block** (excluding: gateway, already-excluded ranges, host 0's own temp IP, and **IPs already allocated by NSX VPC** — NAT SNAT translated addresses and LoadBalancer VIPs, which are legitimately in use by existing Supervisor workloads and should not be flagged as conflicts) using `vmkping -c 1 -W 1`, in parallel batches of 200
 - The scan script is uploaded via SFTP to avoid ESXi's inline command-length limit
-- Any IP that responds is flagged as a **conflict** — it is already in use in the VLAN and must be added to the "Excluded IP Ranges" of the IP Block so Supervisor does not assign it to workloads
+- Any IP that responds and is NOT in the above exclusion set is flagged as a **conflict** — it is a foreign device in the VLAN that must be added to the "Excluded IP Ranges" of the IP Block so Supervisor does not assign it to workloads
 - If conflicts are found, temp IPs for hosts 1–N are re-picked automatically to avoid the conflicting addresses; then PowerCLI adds VMkernel NICs to hosts 1–N using the (potentially re-picked) temp IPs
 
 **Phase 3 — Gateway ping (all hosts)**
@@ -217,6 +217,7 @@ The check runs in three phases:
 - If conflicts were detected, a yellow warning box appears on host 0's row with two fix options:
   - **Fix Automatically** — calls `/api/fix/add-ip-block-exclusion` which merges the conflicting IPs with any existing exclusions, consolidates consecutive addresses into ranges, and writes them to the NSX native `excluded_ips` field via a single NSX `PUT` call. On success, click **"Run Again"** to re-run the check and confirm no conflicts remain.
   - **Fix Manually** — opens vCenter → Virtual Private Clouds → Configure → IP Blocks directly in a new tab
+- On a **clean pass** (all hosts OK, no conflicts), the result banner also shows the number and ranges of IPs available for Supervisor in the External IP Block (block total minus gateway, explicit exclusions, and genuine conflicts — NSX VPC-allocated IPs are counted as still available since they belong to the pool)
 - The button turns green only when all hosts pass the gateway ping **and** no conflicts were found; red otherwise
 - All temporary VMkernel NICs and the DVPortGroup are removed automatically after the test
 

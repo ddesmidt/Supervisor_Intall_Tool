@@ -35,7 +35,7 @@ At the top of the page, fill in the two connection sections:
 |---|---|---|
 | NSX IP / FQDN | `nsx-wld01-a.site-a.vcf.lab` | Do not include `https://` |
 | NSX Username | `admin` | Pre-filled |
-| Password | `VMware123!VMware123!` | |
+| Password | `VMware123!VMware123!` | Eye icon toggles visibility |
 
 ---
 
@@ -46,7 +46,9 @@ Click **"Check if Supervisor is Installed"**.
 **Possible results:**
 
 - **Supervisor [name] is INSTALLED** (green banner) — Supervisor is running on this vCenter. The cluster name, config status, k8s status, control plane VIP, and **network mode** (`NSX-VPC Distributed`, `NSX-VPC Centralized`, or `VDS / FLB`) are shown. The network mode is auto-detected by querying the NSX Transit Gateway attachment type via the NSX API.
-- **Supervisor is NOT installed** (blue banner) — The "Check Supervisor Requirements" button appears below.
+- **Supervisor is NOT installed** (blue banner) — Supervisor is not yet deployed.
+
+> **Auto-run:** When NSX credentials are filled in, the requirements check runs automatically after a successful install check — so by the time the banner appears, the 3-column requirement matrix is already loading in the background.
 
 ---
 
@@ -73,7 +75,7 @@ Each card shows:
 
 ### The full-width steps panel
 
-Clicking **"View steps"** on a card shows all requirement steps for that mode in a full-width panel below the cards. Only one mode's steps are visible at a time. Each step shows:
+Clicking **"View Requirement Steps"** on a card shows all requirement steps for that mode in a full-width panel below the cards. Only one mode's steps are visible at a time. The panel header contains a **"Re-check Requirements"** button to refresh all checks at any time. Each step shows:
 - A status icon: ✅ green / ⚠️ amber / ❌ red / ℹ️ info
 - The step name and a one-line summary message
 - Action buttons where applicable (Fix, Check MTU, Check VLAN, Open in vCenter)
@@ -131,7 +133,8 @@ Clicking it opens a wizard that:
 6. Shows a per-host **pass / fail** result; conflicts shown in a yellow box with two fix options:
    - **Fix Automatically** — adds the conflicting IPs to the IP Block's Excluded Ranges via the NSX API immediately
    - **Fix Manually** — opens vCenter → VPC → Configure → IP Blocks in a new tab
-7. Removes all temporary VMkernel NICs and the temporary DVPortGroup automatically
+7. On a **clean pass** (all hosts OK, no conflicts), the result banner also shows how many IPs in the External IP Block are **available for Supervisor** and their ranges — so you can confirm the block has enough headroom before deploying
+8. Removes all temporary VMkernel NICs and the temporary DVPortGroup automatically
 
 The button turns green only when all hosts pass the gateway ping **and** no IP conflicts were detected.
 
@@ -207,7 +210,8 @@ Select the storage policy for Supervisor control plane VMs. The list is filtered
 | Field | Description |
 |---|---|
 | Supervisor Name | A name for the Supervisor (e.g. `supervisor-wld01-a`) |
-| Management Network | The port group for the control plane management network |
+| Management Network | The port group for the control plane management network — **auto-discovered** from the VNA node (Distributed) or Edge node (Centralized); shown with a green ✓ note when auto-filled |
+| Gateway / DNS / NTP | Also auto-populated from the VNA or Edge node's management interface configuration |
 
 ### Deployment Progress
 
