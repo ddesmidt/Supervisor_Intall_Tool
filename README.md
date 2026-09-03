@@ -67,7 +67,7 @@ cd Supervisor_Intall_Tool
 # Install Python dependencies
 apt-get install -y python3-flask python3-requests python3-paramiko
 
-# Install PowerShell Core (required for the Check VLAN feature)
+# Install PowerShell Core (required for the Check Ext. Conn. feature)
 snap install powershell --classic
 
 # Install VMware PowerCLI (inside PowerShell)

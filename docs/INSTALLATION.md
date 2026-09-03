@@ -59,7 +59,7 @@ pip3 install -r app/requirements.txt
 
 ## Step 3 — Install PowerShell Core + VMware PowerCLI
 
-The **Check VLAN** feature uses PowerCLI to create temporary VMkernel adapters on ESX hosts and run connectivity tests. This requires PowerShell Core (`pwsh`) and the VMware PowerCLI module.
+The **Check Ext. Conn.** feature uses PowerCLI to create temporary VMkernel adapters on ESX hosts and run connectivity tests. This requires PowerShell Core (`pwsh`) and the VMware PowerCLI module.
 
 ```bash
 # Install PowerShell Core via snap
@@ -83,7 +83,7 @@ pwsh -Command "Get-Module -ListAvailable VMware.PowerCLI | Select Name, Version"
 
 > **Note:** If the VM has no internet access, install PowerCLI offline by downloading the module on a connected machine and copying it to `/usr/local/share/powershell/Modules/`.
 
-> **Note:** The Check VLAN button is only shown when S5-1 through S5-4 are all green. If you do not use this feature, PowerShell and PowerCLI are not required.
+> **Note:** The Check Ext. Conn. button is only shown when R5-1 through R5-4 are all green. If you do not use this feature, PowerShell and PowerCLI are not required.
 
 ---
 
