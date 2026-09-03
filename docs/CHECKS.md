@@ -15,25 +15,29 @@ The tool runs the same set of checks against three deployment modes in parallel.
 | ❌ Red | Requirement not met — must be fixed before deploying |
 | ℹ️ Info / To Validate | Informational — manual validation required (used for VDS/FLB) |
 
+Step badges in the UI use an **R prefix** (R1, R2, R3, R5-1 …) to stand for "Requirement".
+
 **Step order (NSX modes):**
 
 | Step | Name | All modes |
 |---|---|---|
 | Auth | vCenter Authentication | ✅ |
-| S1 | Supervisor Capability | ✅ |
-| S2 | vSphere HA / DRS | ✅ |
-| S3 | NSX Host Preparation | NSX only |
-| S4 | VNA Cluster / Edge Cluster | NSX only |
-| S5-1 | External Connection | NSX only |
-| S5-2 | Transit Gateway | NSX only |
-| S5-3 | External IP Block | NSX only |
-| S5-4 | VPC Connectivity Profile | NSX only |
+| R1 | Supervisor Capability | ✅ |
+| R2 | vSphere HA / DRS | ✅ |
+| R3 | NSX Host Preparation | NSX only |
+| R4 | VNA Cluster / Edge Cluster | NSX only |
+| R5-1 | External Connection | NSX only |
+| R5-2 | Transit Gateway | NSX only |
+| R5-3 | External IP Block | NSX only |
+| R5-4 | VPC Connectivity Profile | NSX only |
 
-**VDS/FLB mode** shows Auth, S1, S2, and a single informational step:
+**VDS/FLB mode** shows Auth, R1, R2, and a single informational step:
 
 | Step | Name |
 |---|---|
-| S3 | VLANs/Subnets for Supervisor and FLB |
+| R3 | VLANs/Subnets for Supervisor and FLB |
+
+When Supervisor is already installed, the column matching its deployment mode shows a blue **"In Use"** chip instead of the readiness chip.
 
 ---
 
@@ -52,7 +56,7 @@ The tool sends a `POST /api/session` to vCenter. In VCF 9.1 environments, the WL
 
 ---
 
-## S1 — Supervisor Capability (vSphere)
+## R1 — Supervisor Capability (vSphere)
 
 **What it checks:** Is the vSphere cluster capable of running Supervisor?
 
@@ -68,7 +72,7 @@ The tool sends a `POST /api/session` to vCenter. In VCF 9.1 environments, the WL
 
 ---
 
-## S2 — vSphere HA / DRS
+## R2 — vSphere HA / DRS
 
 **What it checks:** Is vSphere HA enabled and DRS set to **Fully Automated** on every cluster?
 
@@ -79,14 +83,16 @@ The vCenter REST API can return stale values for HA/DRS state. The tool uses **v
 
 **Expanded detail (when green):**
 ```
-  · cluster-wld01-01a: HA ✓  DRS ✓ (fullyAutomated)
+· cluster-wld01-01a:
+  - DRS ✓ (fullyAutomated)
+  - HA ✓
 ```
 
 **Expanded detail (when red):**
 ```
-  · cluster-wld01-01a: HA disabled, DRS not Fully Automated (mode: manual)
-
-Both HA and DRS (Fully Automated) are required for Supervisor.
+· cluster-wld01-01a:
+  - HA disabled
+  - DRS not Fully Automated (mode: manual)
 ```
 
 **Fix wizard (automated):** Calls `ReconfigureComputeResource_Task` via vCenter SOAP to enable HA and set DRS to `fullyAutomated` on the affected cluster. Polls the task until completion (up to 60 seconds).
@@ -95,7 +101,7 @@ Both HA and DRS (Fully Automated) are required for Supervisor.
 
 ---
 
-## S3 — NSX Host Preparation
+## R3 — NSX Host Preparation
 
 **What it checks:** Are the ESXi hosts in the cluster prepared for NSX (i.e. NSX agents installed and Transport Node configuration applied)?
 
@@ -120,7 +126,7 @@ If any host has issues the step shows ⚠️ Amber with a summary such as `3/4 h
 **Open in vCenter:** An **"Open in vCenter (NSX Host Prep)"** link button appears below the step title. It opens Cluster > Configure > Networking > **Network Configuration** directly in the vSphere Client (one tab per cluster).
 
 **Check MTU button:**
-A **"Check MTU"** button appears on S3 for NSX columns. Clicking it opens a wizard that:
+A **"Check MTU"** button appears on R3 for NSX columns. Clicking it opens a wizard that:
 1. Shows all available ESX hosts (with health indicator); user selects the source host
 2. Prompts for the ESX root password
 3. Temporarily enables SSH on that host via vCenter SOAP (if not already enabled)
@@ -132,11 +138,11 @@ A **"Check MTU"** button appears on S3 for NSX columns. Clicking it opens a wiza
 
 ---
 
-## S4 — VNA Cluster / Edge Cluster
+## R4 — VNA Cluster / Edge Cluster
 
 This step differs significantly between modes.
 
-### S4 — Distributed: VNA Cluster
+### R4 — Distributed: VNA Cluster
 
 **What it checks:** Is there at least one Virtual Network Appliance (VNA) cluster in NSX in a `SUCCESS` deployment state?
 
@@ -159,7 +165,7 @@ This step differs significantly between modes.
 
 **Open in vCenter:** An **"Open in vCenter (VNA Cluster)"** link button appears below the step title, opening the NSX VNA Clusters page directly in the vSphere Client.
 
-### S4 — Centralized: Edge Cluster + Tier-0
+### R4 — Centralized: Edge Cluster + Tier-0
 
 **What it checks:** Are there Edge Clusters and Tier-0 gateways present in NSX (required for centralized routing)?
 
@@ -169,11 +175,11 @@ This step differs significantly between modes.
 
 ---
 
-## S5-1 — Distributed / Centralized External Connection
+## R5-1 — Distributed / Centralized External Connection
 
 This step differs between modes.
 
-### S5-1 — Distributed: Distributed External Connection
+### R5-1 — Distributed: Distributed External Connection
 
 **What it checks:** Is there at least one **Distributed VLAN Connection** in NSX?
 
@@ -188,12 +194,12 @@ This step differs between modes.
 
 **Fix wizard (automated):** Creates a new Distributed VLAN Connection — prompts for name, VLAN ID, and gateway CIDR.
 
-**Cascade mode:** The S5-1 fix wizard offers an optional **"Also auto-fix S5-2, S5-3, S5-4"** checkbox. When enabled, after S5-1 succeeds the tool automatically runs S5-2 (TGW attachment), S5-3 (External IP Block), and S5-4 (VPC Profile) in sequence, showing per-step progress. Steps that cannot run due to missing data (e.g. no VNA Cluster yet) are skipped with a warning.
+**Cascade mode:** The R5-1 fix wizard offers an optional **"Also auto-fix R5-2, R5-3, R5-4"** checkbox. When enabled, after R5-1 succeeds the tool automatically runs R5-2 (TGW attachment), R5-3 (External IP Block), and R5-4 (VPC Profile) in sequence, showing per-step progress. Steps that cannot run due to missing data (e.g. no VNA Cluster yet) are skipped with a warning.
 
 **Open in vCenter:** An **"Open in vCenter (Ext. Conn.)"** link button opens the External Connections page directly in the vSphere Client.
 
-**Check VLAN button:**
-Once S5-1 through S5-4 are all green, a **"Check VLAN"** button appears on S5-1 in the Distributed column. It verifies end-to-end VLAN reachability on every ESX host and validates that the External IP Block's exclusion list is complete.
+**Check Ext. Conn. button:**
+Once R5-1 through R5-4 are all green, a **"Check Ext. Conn."** button appears on R5-1 in the Distributed steps panel. It verifies end-to-end VLAN reachability on every ESX host and validates that the External IP Block's exclusion list is complete.
 
 The check runs in three phases:
 
@@ -221,7 +227,7 @@ The check runs in three phases:
 - The button turns green only when all hosts pass the gateway ping **and** no conflicts were found; red otherwise
 - All temporary VMkernel NICs and the DVPortGroup are removed automatically after the test
 
-### S5-1 — Centralized: Centralized External Connection
+### R5-1 — Centralized: Centralized External Connection
 
 **What it checks:** Is there at least one **Gateway Connection** (Tier-0 backed) in NSX?
 
@@ -239,9 +245,9 @@ The check runs in three phases:
 
 ---
 
-## S5-2 — Distributed / Centralized Transit Gateway
+## R5-2 — Distributed / Centralized Transit Gateway
 
-### S5-2 — Distributed: Distributed Transit Gateway
+### R5-2 — Distributed: Distributed Transit Gateway
 
 **What it checks:** Is there at least one Transit Gateway (TGW) that has an attachment pointing to a Distributed VLAN Connection?
 
@@ -264,7 +270,7 @@ The check runs in three phases:
 
 **Open in vCenter:** An **"Open in vCenter (Trans. GW)"** link button opens the Transit Gateway detail page directly in the vSphere Client, pre-navigating to the specific TGW found by the check.
 
-### S5-2 — Centralized: Centralized Transit Gateway
+### R5-2 — Centralized: Centralized Transit Gateway
 
 **What it checks:** Is there at least one TGW with an attachment pointing to a Gateway Connection?
 
@@ -283,7 +289,7 @@ The Edge Cluster is read from `GET /…/transit-gateways/{id}/centralized-config
 
 ---
 
-## S5-3 — External IP Block
+## R5-3 — External IP Block
 
 **What it checks:** Is there at least one NSX IP Block with `visibility = EXTERNAL`?
 
@@ -316,7 +322,7 @@ Excluded ranges are read from the NSX native `excluded_ips` field (`[{start, end
 
 ---
 
-## S5-4 — Distributed / Centralized VPC Connectivity Profile
+## R5-4 — Distributed / Centralized VPC Connectivity Profile
 
 **What it checks:** Does the NSX Default Project have a VPC Connectivity Profile that satisfies all of the following?
 
@@ -345,6 +351,8 @@ The check scans **all projects** (not just Default) and shows all valid profiles
   Outbound NAT: enabled
 ```
 
+IP block names are resolved from the NSX display name (not the raw path segment).
+
 **Fix wizard (automated):**
 
 Fully reactive form:
@@ -367,9 +375,9 @@ Fully reactive form:
 
 ---
 
-## VDS/FLB — S3 (VLANs/Subnets for Supervisor and FLB)
+## VDS/FLB — R3 (VLANs/Subnets for Supervisor and FLB)
 
-The VDS/FLB column shows Auth, S1, and S2 (same as the NSX modes), then a single informational step instead of the NSX-specific steps S3–S5-4.
+The VDS/FLB column shows Auth, R1, and R2 (same as the NSX modes), then a single informational step instead of the NSX-specific steps R3–R5-4.
 
 **What it shows:** A reminder that deploying Supervisor with VDS requires the admin to pre-configure the correct VLANs and subnets for the Supervisor control plane and FLB networking. The tool does not automate or validate these for VDS/FLB mode.
 
