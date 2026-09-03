@@ -248,15 +248,55 @@ A summary line shows the Supervisor VIP and the total number of clusters and nam
 | Control Plane VIP | The VKS cluster's own Kubernetes API endpoint |
 | K8s Version | Kubernetes version of the VKS cluster |
 | Workers | Total worker node replica count |
+| Topology | Per-cluster **"Topology"** button — opens the Network Topology modal showing the full NSX path for that cluster as an SVG diagram. The result is cached so re-opening is instant. |
 | Connectivity | Per-cluster **"Test"** button — opens the Connectivity Test modal. The button is colour-coded: **grey** = not yet tested · 🔵 blue (spinning) = test in progress · 🟢 green = all tests passed · 🔴 red = at least one test failed. The colour persists until the next test run. |
 
 ---
 
-## Step 7 — Connectivity Test
+## Step 7 — Network Topology
+
+Clicking **"Topology"** on a VKS cluster row opens the **Network Topology** modal. It queries NSX directly and renders a live SVG diagram showing the complete network path from the physical upstream router down to the highlighted VKS cluster.
+
+### What is drawn
+
+The diagram shows nodes top-to-bottom:
+
+| Layer | Node | Detail shown |
+|---|---|---|
+| Internet | Cloud shape | Upstream / public network |
+| Physical router | Hexagon | All uplink VLANs and subnets / gateway IPs discovered from Tier-0 EXTERNAL interfaces or the DVLAN connection |
+| External Connection | Pill label | **Distributed**: DVLAN name + VLAN ID + subnet  **Centralized**: Tier-0 name + "BGP" |
+| Transit Gateway | Circle | TGW name — highlighted in blue if it is the Supervisor's TGW |
+| Supervisor VIP | Circle | Supervisor Kubernetes control plane VIP |
+| VPC / Namespace | Rectangle | One box per VPC connected to this TGW, showing VPC name |
+| VKS Cluster | Rectangle | Control plane VIP — the selected cluster is highlighted in blue |
+
+Arrows with arrowheads connect every layer in the path.
+
+### NSX data source
+
+The topology endpoint queries:
+1. **All NSX projects** (`/orgs/default/projects`) — finds Transit Gateways in each project
+2. **Legacy global path** (`/infra/transit-gateways`) — for older NSX versions
+3. For each TGW, resolves attachments to determine **Distributed** (DVLAN connection) or **Centralized** (Gateway Connection → Tier-0 BGP) mode
+4. Enumerates Tier-0 locale-service **EXTERNAL interfaces** to collect all uplink VLANs and subnets (deduped per VLAN)
+5. Maps VPCs → VPC Connectivity Profile → TGW so VPC names appear on the correct branch
+
+### Caching
+
+The NSX response is cached in the page session. If you open the Topology modal first and then click "Test" on the same cluster, the topology diagram in the Connectivity Test panel appears instantly without a second NSX call.
+
+---
+
+## Step 8 — Connectivity Test
 
 Clicking **"Test"** on a VKS cluster row opens the **Connectivity Test** modal, which runs three groups of tests to verify network reachability between the Supervisor and the VKS cluster.
 
 > Tests may take 20–30 seconds because the exec-based probes must find a suitable pod, open a WebSocket exec session, and run the TCP tool inside the container.
+
+The modal has a **two-column layout**:
+- **Left** — three groups of connectivity test results
+- **Right** — Network Topology SVG (the same diagram as the Topology modal; loaded in parallel with the test; reuses the cached NSX response if Topology was opened first)
 
 ### Group 1 — TCP from App Server
 
