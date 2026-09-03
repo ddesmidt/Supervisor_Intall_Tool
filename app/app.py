@@ -1,6 +1,8 @@
 import ipaddress
 import re
+import time
 import traceback
+import yaml
 from urllib.parse import urlparse
 
 import requests
@@ -1531,6 +1533,836 @@ def install_supervisor():
         result["error"] = traceback.format_exc()
 
     return jsonify(result)
+
+
+@app.route("/api/vks-clusters", methods=["POST"])
+def vks_clusters():
+    """List VKS (TKG) clusters deployed under the Supervisor via the supervisor K8s API."""
+    body        = request.get_json(force=True)
+    vc_url      = normalize_url(body.get("vc_url", ""))
+    username    = body.get("username", "")
+    password    = body.get("password", "")
+    # Supervisor SSO credentials may differ from vCenter (e.g. administrator@wld.sso)
+    sup_user    = body.get("sup_username") or username
+    sup_pass    = body.get("sup_password") or password
+
+    result = {"success": False, "supervisor_vip": None, "clusters": [],
+              "namespaces": [], "error": None}
+    try:
+        # ── 1. Authenticate to vCenter ─────────────────────────────────────
+        token, _ = vc_auth(vc_url, username, password)
+
+        # ── 2. Find the supervisor control-plane VIP ────────────────────────
+        sup_clusters = vc_get(vc_url, token,
+                              "/api/vcenter/namespace-management/clusters") or []
+        supervisor_vip = None
+        for c in sup_clusters:
+            cid = c.get("cluster")
+            if not cid:
+                continue
+            detail = vc_get(vc_url, token,
+                            f"/api/vcenter/namespace-management/clusters/{cid}") or {}
+            ep = detail.get("api_server_cluster_endpoint", "")
+            if ep:
+                supervisor_vip = ep
+                break
+
+        if not supervisor_vip:
+            raise RuntimeError(
+                "Could not determine the Supervisor control-plane VIP. "
+                "Make sure the Supervisor is fully installed (RUNNING).")
+
+        result["supervisor_vip"] = supervisor_vip
+
+        # ── 3. Login to the supervisor to get a K8s bearer token ───────────
+        s = requests.Session()
+        s.verify = False
+        login_r = s.post(f"https://{supervisor_vip}/wcp/login",
+                         auth=(sup_user, sup_pass),
+                         timeout=15)
+        if login_r.status_code not in (200, 204):
+            raise RuntimeError(
+                f"Supervisor login failed (HTTP {login_r.status_code}). "
+                f"Credentials used: {sup_user}. "
+                "The Supervisor may use a different SSO domain than vCenter "
+                "(e.g. administrator@wld.sso). Enter the correct credentials above.")
+        k8s_token = login_r.json().get("session_id", "")
+        if not k8s_token:
+            raise RuntimeError("Supervisor login succeeded but returned no session_id.")
+
+        k8s_headers = {"Authorization": f"Bearer {k8s_token}",
+                       "Accept": "application/json"}
+
+        # ── 4. List CAPI clusters (VKS clusters) ───────────────────────────
+        capi_r = s.get(f"https://{supervisor_vip}:6443"
+                       f"/apis/cluster.x-k8s.io/v1beta1/clusters",
+                       headers=k8s_headers, timeout=20)
+        capi_r.raise_for_status()
+        items = capi_r.json().get("items", [])
+
+        clusters_out = []
+        for item in items:
+            meta   = item.get("metadata", {})
+            spec   = item.get("spec", {})
+            status = item.get("status", {})
+            cp_ep  = spec.get("controlPlaneEndpoint", {})
+            # Kubernetes version: prefer topology, then spec.version
+            k8s_ver = (spec.get("topology", {}).get("version")
+                       or spec.get("version")
+                       or status.get("controlPlane", {}).get("version", ""))
+            # Worker nodes count
+            workers = (spec.get("topology", {}).get("workers", {})
+                           .get("machineDeployments", []))
+            worker_count = sum(
+                (md.get("replicas") or 0) for md in workers
+            ) if workers else status.get("replicas", 0)
+            clusters_out.append({
+                "name":               meta.get("name", ""),
+                "namespace":          meta.get("namespace", ""),
+                "phase":              status.get("phase", "Unknown"),
+                "control_plane_vip":  cp_ep.get("host", ""),
+                "kubernetes_version": k8s_ver,
+                "cp_ready":           status.get("controlPlaneReady", False),
+                "infra_ready":        status.get("infrastructureReady", False),
+                "worker_replicas":    worker_count,
+                "created":            meta.get("creationTimestamp", ""),
+            })
+        result["clusters"] = clusters_out
+
+        # ── 5. Namespace list from vCenter for context ─────────────────────
+        ns_list = vc_get(vc_url, token, "/api/vcenter/namespaces/instances") or []
+        result["namespaces"] = [
+            {"name": ns.get("namespace", ""),
+             "config_status": ns.get("config_status", "")}
+            for ns in ns_list
+        ]
+
+        result["success"] = True
+
+    except requests.HTTPError as e:
+        result["error"] = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+    except Exception as e:
+        result["error"] = str(e)
+
+    return jsonify(result)
+
+
+# ── Pure-Python Kubernetes WebSocket exec (no external deps) ──────────────────
+
+def _k8s_ws_exec(host, port, token, namespace, pod_name, command,
+                  timeout=12, ssl_ctx=None):
+    """
+    Execute *command* (list of strings) inside a Kubernetes pod via the
+    WebSocket exec API.  Uses only Python stdlib (ssl + socket).
+    Returns (stdout_str, stderr_str, error_str).
+    """
+    import ssl as _ssl
+    import socket as _sock
+    import struct as _struct
+    import base64 as _b64
+    import os as _os
+    from urllib.parse import quote as _q
+
+    cmd_qs = "&".join(f"command={_q(str(c), safe='')}" for c in command)
+    path   = (f"/api/v1/namespaces/{namespace}/pods/{pod_name}/exec"
+              f"?{cmd_qs}&stdout=1&stderr=1&stdin=0&tty=0")
+
+    key = _b64.b64encode(_os.urandom(16)).decode()
+    if token:
+        auth_hdr = f"Authorization: Bearer {token}\r\n"
+    else:
+        auth_hdr = ""
+    handshake = (
+        f"GET {path} HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        f"Upgrade: websocket\r\n"
+        f"Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Key: {key}\r\n"
+        f"Sec-WebSocket-Version: 13\r\n"
+        f"Sec-WebSocket-Protocol: v4.channel.k8s.io\r\n"
+        f"{auth_hdr}"
+        f"\r\n"
+    ).encode()
+
+    if ssl_ctx is None:
+        ctx = _ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+    else:
+        ctx = ssl_ctx
+
+    raw  = _sock.create_connection((host, int(port)), timeout=timeout)
+    wsock = ctx.wrap_socket(raw, server_hostname=host)
+    wsock.settimeout(timeout)
+
+    try:
+        wsock.sendall(handshake)
+
+        # Read HTTP upgrade response
+        buf = b""
+        while b"\r\n\r\n" not in buf:
+            chunk = wsock.recv(4096)
+            if not chunk:
+                raise RuntimeError("Connection closed during WebSocket upgrade")
+            buf += chunk
+        status_line = buf.split(b"\r\n", 1)[0].decode(errors="replace")
+        if "101" not in status_line:
+            # Pull any body for better error context
+            raise RuntimeError(f"K8s exec upgrade failed: {status_line}")
+
+        stdout_b = b""
+        stderr_b = b""
+        error_b  = b""
+        deadline = time.time() + timeout
+
+        while time.time() < deadline:
+            try:
+                # Read 2-byte frame header
+                hdr = b""
+                while len(hdr) < 2:
+                    c = wsock.recv(2 - len(hdr))
+                    if not c:
+                        return (stdout_b.decode("utf-8", errors="replace"),
+                                stderr_b.decode("utf-8", errors="replace"),
+                                error_b.decode("utf-8", errors="replace"))
+                    hdr += c
+
+                opcode  = hdr[0] & 0x0F
+                masked  = (hdr[1] & 0x80) != 0
+                plen    = hdr[1] & 0x7F
+
+                if plen == 126:
+                    ext = b""
+                    while len(ext) < 2:
+                        ext += wsock.recv(2 - len(ext))
+                    plen = _struct.unpack(">H", ext)[0]
+                elif plen == 127:
+                    ext = b""
+                    while len(ext) < 8:
+                        ext += wsock.recv(8 - len(ext))
+                    plen = _struct.unpack(">Q", ext)[0]
+
+                mask_key = b""
+                if masked:
+                    while len(mask_key) < 4:
+                        mask_key += wsock.recv(4 - len(mask_key))
+
+                payload = b""
+                while len(payload) < plen:
+                    chunk = wsock.recv(min(4096, plen - len(payload)))
+                    if not chunk:
+                        break
+                    payload += chunk
+
+                if masked:
+                    payload = bytes(b ^ mask_key[i % 4]
+                                    for i, b in enumerate(payload))
+
+                if opcode == 8:   # close frame
+                    break
+
+                if not payload:
+                    continue
+
+                channel = payload[0]
+                data    = payload[1:]
+
+                if channel == 1:
+                    stdout_b += data
+                elif channel == 2:
+                    stderr_b += data
+                elif channel == 3:
+                    error_b  += data
+                    # status channel signals end of exec
+                    if (b'"status":"Success"' in error_b
+                            or b'"status":"Failure"' in error_b):
+                        break
+
+            except _ssl.SSLWantReadError:
+                time.sleep(0.05)
+            except (_sock.timeout, OSError):
+                break
+
+        return (stdout_b.decode("utf-8", errors="replace"),
+                stderr_b.decode("utf-8", errors="replace"),
+                error_b.decode("utf-8", errors="replace"))
+    finally:
+        try:
+            wsock.close()
+        except Exception:
+            pass
+
+
+def _k8s_find_exec_pod(api_base, headers, hint_namespaces=None,
+                       host_network_only=True, ssl_ctx=None, req_cert=None):
+    """
+    Find a Running pod that responds to K8s exec AND has at least one
+    network-testing tool (nc, python3, curl, wget, or bash).
+
+    req_cert: tuple (cert_path, key_path) forwarded to requests.get for
+              clusters that use client-certificate authentication.
+
+    Returns (namespace, pod_name, tool_available) or (None, None, None).
+    """
+    h, p = (api_base.split(":", 1) if ":" in api_base else (api_base, "6443"))
+    port = int(p)
+    token = headers.get("Authorization", "").replace("Bearer ", "")
+
+    _req_kw = dict(headers=headers, verify=False, timeout=10)
+    if req_cert:
+        _req_kw["cert"] = req_cert
+
+    # Fetch all namespace names
+    namespaces = hint_namespaces or []
+    try:
+        ns_r = requests.get(f"https://{h}:{port}/api/v1/namespaces", **_req_kw)
+        if ns_r.ok:
+            namespaces = [n["metadata"]["name"]
+                          for n in ns_r.json().get("items", [])]
+    except Exception:
+        pass
+    if not namespaces:
+        namespaces = ["kube-system", "vmware-system-nsx", "vmware-system-csi"]
+
+    # Preferred pod-name prefixes (DaemonSets / node agents are most likely to have tools)
+    _PREFER = ["antrea-agent", "vsphere-csi-node",
+               "node-exporter", "calico-node", "cilium", "flannel", "nsx-node-agent"]
+    # Avoid known tool-less control-plane containers AND kube-proxy:
+    # kube-proxy manages iptables DNAT/MASQUERADE rules; raw socket probes run
+    # inside its container (hostNetwork) can be redirected by those very rules,
+    # giving false TCP_FAIL results even when connectivity is fine.
+    _AVOID  = ["antrea-controller", "coredns", "etcd-", "kube-apiserver",
+               "kube-controller-manager", "kube-scheduler", "metrics-server",
+               "kube-proxy"]
+
+    # Quick-probe commands to confirm exec works + detect which tool is available
+    # Each probe: (tool_name, command_list, success_test_fn(stdout, stderr, status))
+    _PROBE_CMDS = [
+        ("sh",      ["sh",   "-c", "echo _alive_"]),
+        ("bash",    ["bash", "-c", "echo _alive_"]),
+        # direct version checks — any output + Success status = tool present
+        ("python3", ["python3", "--version"]),
+        ("nc",      ["nc",      "--version"]),
+        ("curl",    ["curl",    "--version"]),
+        ("wget",    ["wget",    "--version"]),
+    ]
+
+    def _pod_score(pod):
+        name = pod["metadata"]["name"].lower()
+        hn   = pod.get("spec", {}).get("hostNetwork", False)
+        if any(name.startswith(a) for a in _AVOID):
+            return 99
+        pref = any(name.startswith(pp) for pp in _PREFER)
+        return (0 if pref else 1) * 10 + (0 if hn else 5)
+
+    for ns in namespaces:
+        try:
+            pods_r = requests.get(
+                f"https://{h}:{port}/api/v1/namespaces/{ns}/pods", **_req_kw)
+            if not pods_r.ok:
+                continue
+            pods = pods_r.json().get("items", [])
+        except Exception:
+            continue
+
+        pods = [pod for pod in pods
+                if pod.get("status", {}).get("phase") == "Running"
+                and (not host_network_only
+                     or pod.get("spec", {}).get("hostNetwork", False))]
+        pods.sort(key=_pod_score)
+
+        for pod in pods:
+            pod_name = pod["metadata"]["name"]
+            for tool, cmd in _PROBE_CMDS:
+                try:
+                    stdout, stderr, status = _k8s_ws_exec(
+                        h, port, token, ns, pod_name, cmd,
+                        timeout=6, ssl_ctx=ssl_ctx
+                    )
+                    combined = stdout + stderr
+                    ok = ("_alive_" in combined
+                          or ('"status":"Success"' in status and tool not in ("sh", "bash"))
+                          or (combined.strip() and "OCI" not in status
+                              and "not found" not in combined.lower()))
+                    if ok:
+                        return ns, pod_name, tool
+                except Exception:
+                    pass
+
+    return None, None, None
+
+
+def _tcp_test_via_exec(api_base, headers, ns, pod_name, tool,
+                       target_host, target_port, ssl_ctx=None):
+    """
+    Run a TCP connectivity test to target_host:target_port from inside
+    the given pod.  Uses *tool* as first choice, then falls back.
+
+    Returns {"ok": bool, "method_used": str, "output": str, "error": str|None}
+    """
+    import json as _json
+    h, p = (api_base.split(":", 1) if ":" in api_base else (api_base, "6443"))
+    port = int(p)
+    token = headers.get("Authorization", "").replace("Bearer ", "")
+
+    # Probe tiers:
+    #   Tier-1 (reliable — trust both success AND failure): python3
+    #   Tier-2 (somewhat reliable, but nc exit-code can be misleading): curl, wget
+    #   Tier-3 (nc — known to give false negatives in some VMware containers):
+    #           try all nc variants, but on failure keep going to Tier-2
+    #   Tier-4 (shell-wrapped, needs sh/bash)
+    #
+    # Strategy: on Tier-3 failure don't stop — keep trying until a Tier-1/2 probe
+    # confirms the result.  This avoids the false-negative seen when nc says FAIL
+    # but curl confirms 403 (= TCP/TLS works).
+
+    tier1 = [
+        ("python3", ["python3", "-c",
+                     f"import socket,sys; s=socket.socket(); s.settimeout(3); "
+                     f"r=s.connect_ex(('{target_host}',{target_port})); sys.exit(r)"]),
+    ]
+    tier2 = [
+        ("curl",  ["curl", "-sk", "--max-time", "3", "--connect-timeout", "3",
+                   f"https://{target_host}:{target_port}/healthz"]),
+        ("wget",  ["wget", "-qT3", "--no-check-certificate", "-O", "/dev/null",
+                   f"https://{target_host}:{target_port}/healthz"]),
+    ]
+    tier3_nc = [
+        ("nc",    ["nc", "-z", "-w", "3", target_host, str(target_port)]),
+        ("nc-v2", ["nc", "-z", "-w3",     target_host, str(target_port)]),
+        ("nc-v3", ["nc", "-zw3",           target_host, str(target_port)]),
+        ("nc-v4", ["nc", "-z",             target_host, str(target_port)]),
+    ]
+    tier4 = [
+        # sh+curl first — most reliable (HTTP 4xx = TCP OK; exit 7 = can't connect;
+        # exit 127 = curl missing → print CURL_MISSING so we can skip)
+        ("sh+curl",      ["sh", "-c",
+            f"type curl >/dev/null 2>&1 || {{ echo CURL_MISSING; exit 0; }}; "
+            f"curl -sk --max-time 5 https://{target_host}:{target_port}/healthz "
+            f">/dev/null 2>&1; c=$?; "
+            f"if [ $c -eq 7 ] || [ $c -eq 6 ]; then echo TCP_FAIL; else echo TCP_OK; fi"]),
+        # bash /dev/tcp — lightweight, no external tools needed
+        ("bash/dev/tcp", ["bash", "-c",
+            f"timeout 3 bash -c 'echo >/dev/tcp/{target_host}/{target_port}' "
+            f"2>/dev/null && echo TCP_OK || echo TCP_FAIL"]),
+        # sh+python3 — reliable socket test, try after curl/bash
+        ("sh+python3",   ["sh", "-c",
+            f"type python3 >/dev/null 2>&1 || {{ echo PYTHON3_MISSING; exit 0; }}; "
+            f"python3 -c \"import socket; s=socket.socket(); s.settimeout(5);"
+            f"r=s.connect_ex(('{target_host}',{target_port}));"
+            f"print('TCP_OK' if r==0 else 'TCP_FAIL')\""]),
+        ("sh+nc",        ["sh", "-c",
+            f"nc -z -w 3 {target_host} {target_port} 2>/dev/null "
+            f"&& echo TCP_OK || echo TCP_FAIL"]),
+    ]
+
+    # Re-order Tier-1 to put the known-working tool first
+    if tool in ("python3",):
+        order = tier1 + tier2 + tier3_nc + tier4
+    elif tool in ("curl", "wget"):
+        order = tier2 + tier1 + tier3_nc + tier4
+    else:
+        # tool is nc, sh, bash — still try python3/curl first for reliability
+        order = tier1 + tier2 + tier3_nc + tier4
+
+    nc_failed = False   # track nc failure so we can continue to curl
+    shell_fail_method = None
+    shell_fail_output = ""
+
+    for method, cmd in order:
+        try:
+            stdout, stderr, status = _k8s_ws_exec(
+                h, port, token, ns, pod_name, cmd,
+                timeout=12, ssl_ctx=ssl_ctx
+            )
+            combined = (stdout + stderr).strip()
+
+            # ── Shell-wrapped: look for explicit marker ───────────────────
+            if "CURL_MISSING" in combined or "PYTHON3_MISSING" in combined:
+                continue   # tool not in this container — try next probe
+            if "TCP_OK" in combined:
+                return {"ok": True,
+                        "method_used": method, "output": combined[:120], "error": None}
+            if "TCP_FAIL" in combined:
+                # Don't return immediately — continue to next probe to confirm.
+                # A later TCP_OK from curl/bash overrides this.
+                shell_fail_method = method
+                shell_fail_output = combined[:120]
+                continue
+
+            # ── Direct binary: use K8s exit-code status ───────────────────
+            if '"status":"Success"' in status:
+                # curl/wget success even on HTTP 4xx/5xx means TCP+TLS OK
+                note = combined[:60] if combined else "TCP connected"
+                return {"ok": True, "method_used": method,
+                        "output": note, "error": None}
+
+            if '"status":"Failure"' in status:
+                try:
+                    msg = _json.loads(status).get("message", "")
+                except Exception:
+                    msg = status
+
+                # Command not found (126/127) or OCI error → try next probe
+                if any(x in msg for x in ("126", "127", "not found", "OCI")):
+                    continue
+
+                # curl/wget: SSL errors mean TCP actually worked
+                if method == "curl" and "exit code 60" in msg:
+                    return {"ok": True, "method_used": method,
+                            "output": "SSL cert error (TCP connected)", "error": None}
+                if method == "wget" and "exit code 5" in msg:
+                    return {"ok": True, "method_used": method,
+                            "output": "SSL cert error (TCP connected)", "error": None}
+
+                # nc bad flags → try next nc variant
+                if method.startswith("nc") and any(x in msg for x in
+                        ["invalid option", "usage", "unknown flag", "unrecognized",
+                         "illegal option", "bad option"]):
+                    continue
+
+                # nc exit-1: may be a false negative — record it but keep going
+                # to let curl/wget confirm.  Only Tier-1 (python3) is trusted here.
+                if method.startswith("nc"):
+                    nc_failed = True
+                    continue   # ← do NOT return yet; try curl/wget first
+
+                # Tier-1 (python3) confirmed failure — trust it
+                if method == "python3":
+                    return {"ok": False, "method_used": method,
+                            "output": combined[:120],
+                            "error": f"{target_host}:{target_port} not reachable from this node (python3 errno≠0)"}
+
+                # Tier-2/4 confirmed failure
+                return {"ok": False, "method_used": method,
+                        "output": combined[:120],
+                        "error": f"{target_host}:{target_port} not reachable from this node"}
+
+        except Exception:
+            continue
+
+    # All probes exhausted
+    if nc_failed and not shell_fail_method:
+        return {"ok": False, "method_used": "nc",
+                "output": "",
+                "error": f"{target_host}:{target_port} not reachable from this node (confirmed by multiple nc variants)"}
+
+    if shell_fail_method:
+        return {"ok": False, "method_used": shell_fail_method,
+                "output": shell_fail_output,
+                "error": f"{target_host}:{target_port} not reachable from this node (confirmed by multiple probes)"}
+
+    return {"ok": False, "method_used": "none", "output": "",
+            "error": "No working probe command found in this container"}
+
+
+@app.route("/api/connectivity-test", methods=["POST"])
+def connectivity_test():
+    """
+    Tests network reachability for VKS communication paths.
+
+    Group 1 — TCP from this server (app VM): always fast, always runs.
+    Group 2 — From Supervisor Nodes → VKS VIP:6443
+               Execs a TCP probe in a hostNetwork pod on each Supervisor node.
+    Group 3 — From VKS Nodes → Supervisor VIP:6443
+               Fetches VKS kubeconfig, finds hostNetwork pod in VKS cluster,
+               execs a TCP probe there.
+    """
+    import socket as _sock
+    import ssl as _ssl_m
+    import base64 as _b64
+    import tempfile as _tmp
+    import json as _json
+
+    def tcp_probe(host, port, timeout=5):
+        try:
+            s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
+            s.settimeout(timeout)
+            t0 = time.time()
+            s.connect((str(host), int(port)))
+            lat = int((time.time() - t0) * 1000)
+            s.close()
+            return {"ok": True, "latency_ms": lat}
+        except _sock.timeout:
+            return {"ok": False, "error": "Timeout (5 s)"}
+        except ConnectionRefusedError:
+            return {"ok": False, "error": "Connection refused"}
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+
+    body     = request.get_json(force=True)
+    vc_url   = normalize_url(body.get("vc_url", ""))
+    username = body.get("username", "")
+    password = body.get("password", "")
+    sup_user = body.get("sup_username") or username
+    sup_pass = body.get("sup_password") or password
+    # Optional: test only this VKS cluster
+    target_ns   = body.get("cluster_namespace", "")
+    target_name = body.get("cluster_name", "")
+    target_vip  = body.get("cluster_vip", "")
+
+    out = {"success": False, "supervisor_vip": None, "server_ip": None,
+           "groups": [], "error": None}
+
+    try:
+        # ── App-server outgoing IP ────────────────────────────────────────
+        try:
+            _s = _sock.socket(_sock.AF_INET, _sock.SOCK_DGRAM)
+            _s.connect(("8.8.8.8", 80))
+            out["server_ip"] = _s.getsockname()[0]
+            _s.close()
+        except Exception:
+            out["server_ip"] = "this server"
+        server_label = f"This server ({out['server_ip']})"
+
+        # ── Auth vCenter → Supervisor VIP ─────────────────────────────────
+        vc_token, _ = vc_auth(vc_url, username, password)
+        for c in (vc_get(vc_url, vc_token,
+                         "/api/vcenter/namespace-management/clusters") or []):
+            cid = c.get("cluster", "")
+            if not cid:
+                continue
+            d = vc_get(vc_url, vc_token,
+                       f"/api/vcenter/namespace-management/clusters/{cid}") or {}
+            ep = d.get("api_server_cluster_endpoint", "")
+            if ep:
+                out["supervisor_vip"] = ep
+                break
+        if not out["supervisor_vip"]:
+            raise RuntimeError("Could not determine Supervisor Control Plane VIP.")
+        supervisor_vip = out["supervisor_vip"]
+
+        # ── Supervisor K8s login ──────────────────────────────────────────
+        _sess = requests.Session()
+        _sess.verify = False
+        lr = _sess.post(f"https://{supervisor_vip}/wcp/login",
+                        auth=(sup_user, sup_pass), timeout=15)
+        if lr.status_code not in (200, 204):
+            raise RuntimeError(
+                f"Supervisor login failed (HTTP {lr.status_code}). "
+                f"Credentials: {sup_user}.")
+        k8s_token = lr.json().get("session_id", "")
+        sup_hdr   = {"Authorization": f"Bearer {k8s_token}",
+                     "Accept": "application/json"}
+        sup_base  = f"{supervisor_vip}:6443"
+
+        # ── All CAPI clusters (filter if specific one requested) ──────────
+        capi_r = _sess.get(f"https://{sup_base}/apis/cluster.x-k8s.io/v1beta1/clusters",
+                           headers=sup_hdr, timeout=20)
+        all_capi = capi_r.json().get("items", []) if capi_r.ok else []
+        if target_name:
+            capi_items = [c for c in all_capi
+                          if c["metadata"]["name"] == target_name]
+        else:
+            capi_items = all_capi
+
+        # ─── Group 1: TCP from app server ────────────────────────────────
+        grp1 = {
+            "id": "tcp",
+            "title": f"TCP reachability from {server_label}",
+            "subtitle": "Direct socket probe — source is the app server, not the Supervisor/VKS nodes",
+            "rows": [],
+        }
+        grp1["rows"].append({
+            "source": server_label,
+            "destination": f"Supervisor VIP ({supervisor_vip}):6443",
+            "method": "tcp", **tcp_probe(supervisor_vip, 6443),
+        })
+        for c in capi_items:
+            vip  = target_vip or c.get("spec", {}).get("controlPlaneEndpoint", {}).get("host", "")
+            port = c.get("spec", {}).get("controlPlaneEndpoint", {}).get("port", 6443)
+            if vip:
+                grp1["rows"].append({
+                    "source": server_label,
+                    "destination": f"VKS '{c['metadata']['name']}' VIP ({vip}):{port}",
+                    "method": "tcp", **tcp_probe(vip, port),
+                })
+        out["groups"].append(grp1)
+
+        # ─── Group 2: Supervisor Node → VKS VIP (exec) ───────────────────
+        grp2 = {
+            "id": "sup_to_vks",
+            "title": "Supervisor Node → VKS Control Plane VIP:6443",
+            "subtitle": "TCP probe exec'd inside a pod on a Supervisor node (hostNetwork=true means same source IP as the node)",
+            "rows": [],
+        }
+        if capi_items:
+            # Search ALL namespaces in Supervisor for a usable exec pod
+            exec_ns, exec_pod, exec_tool = _k8s_find_exec_pod(
+                sup_base, sup_hdr, host_network_only=True)
+            if not exec_pod:
+                exec_ns, exec_pod, exec_tool = _k8s_find_exec_pod(
+                    sup_base, sup_hdr, host_network_only=False)
+
+            for c in capi_items:
+                cname = c["metadata"]["name"]
+                vip   = target_vip or c.get("spec", {}).get("controlPlaneEndpoint", {}).get("host", "")
+                port  = c.get("spec", {}).get("controlPlaneEndpoint", {}).get("port", 6443)
+
+                if not exec_pod:
+                    grp2["rows"].append({
+                        "source": "Supervisor Node",
+                        "destination": f"VKS '{cname}' VIP ({vip}):{port}",
+                        "method": "exec", "ok": False, "note": "",
+                        "error": ("No exec-capable pod found in Supervisor cluster. "
+                                  "The WCP session token may not have pods/exec RBAC "
+                                  "on system namespaces, or all pods are distroless."),
+                    })
+                    continue
+
+                res = _tcp_test_via_exec(sup_base, sup_hdr,
+                                         exec_ns, exec_pod, exec_tool,
+                                         vip, port)
+                # Get pod detail — node name + hostNetwork flag
+                pd = _sess.get(f"https://{sup_base}/api/v1/namespaces/{exec_ns}/pods/{exec_pod}",
+                               headers=sup_hdr, verify=False, timeout=5)
+                pod_spec  = pd.json().get("spec", {}) if pd.ok else {}
+                is_hn     = pod_spec.get("hostNetwork", False)
+                node_name = pod_spec.get("nodeName", "")
+                node_tag  = f" node:{node_name}" if node_name else ""
+                grp2["rows"].append({
+                    "source": (f"Supervisor Node{node_tag} — pod {exec_pod} "
+                               f"({exec_ns}{'  hostNetwork' if is_hn else '  podNetwork'})"),
+                    "destination": f"VKS '{cname}' VIP ({vip}):{port}",
+                    "method": "exec",
+                    "probe": res.get("method_used", ""),
+                    "ok": res["ok"],
+                    "note": res.get("output", ""),
+                    "error": res.get("error"),
+                })
+        out["groups"].append(grp2)
+
+        # ─── Group 3: VKS Node → Supervisor VIP (exec) ───────────────────
+        grp3 = {
+            "id": "vks_to_sup",
+            "title": f"VKS Node → Supervisor Control Plane VIP ({supervisor_vip}):6443",
+            "subtitle": ("TCP probe exec'd inside a pod on a VKS worker node. "
+                         "Note: VKS worker nodes do not normally need direct access to the "
+                         "Supervisor Kubernetes API — this test checks general reachability "
+                         "from the VKS pod network to the Supervisor VIP."),
+            "rows": [],
+        }
+        for c in capi_items:
+            ns    = c["metadata"]["namespace"]
+            cname = c["metadata"]["name"]
+
+            # Fetch VKS kubeconfig secret
+            sec_r = _sess.get(
+                f"https://{sup_base}/api/v1/namespaces/{ns}/secrets/{cname}-kubeconfig",
+                headers=sup_hdr, verify=False, timeout=10)
+
+            def _vks_err(msg):
+                grp3["rows"].append({
+                    "source": f"VKS '{cname}' Node",
+                    "destination": f"Supervisor VIP ({supervisor_vip}):6443",
+                    "method": "exec", "ok": False, "note": "", "error": msg,
+                })
+
+            if not sec_r.ok:
+                _vks_err(f"Could not fetch kubeconfig secret (HTTP {sec_r.status_code})")
+                continue
+
+            kc_b64 = sec_r.json().get("data", {}).get("value", "")
+            if not kc_b64:
+                _vks_err("kubeconfig secret is empty")
+                continue
+
+            try:
+                kc = yaml.safe_load(
+                    _b64.b64decode(kc_b64).decode("utf-8", errors="replace"))
+            except Exception as ye:
+                _vks_err(f"Failed to parse kubeconfig: {ye}")
+                continue
+
+            try:
+                vks_url   = kc["clusters"][0]["cluster"]["server"]
+                vks_host  = vks_url.split("//")[-1].split(":")[0]
+                vks_port  = int(vks_url.split(":")[-1].rstrip("/"))
+                user_e    = kc["users"][0]["user"]
+                cert_b64  = user_e.get("client-certificate-data", "")
+                key_b64   = user_e.get("client-key-data", "")
+                bearer    = user_e.get("token", "")
+            except Exception as pe:
+                _vks_err(f"Could not extract VKS credentials: {pe}")
+                continue
+
+            # Build SSL context with client cert
+            vks_ctx = _ssl_m.create_default_context()
+            vks_ctx.check_hostname = False
+            vks_ctx.verify_mode = _ssl_m.CERT_NONE
+            _cert_f = _key_f = None
+            if cert_b64 and key_b64:
+                try:
+                    with _tmp.NamedTemporaryFile(delete=False, suffix=".crt") as cf:
+                        cf.write(_b64.b64decode(cert_b64))
+                        _cert_f = cf.name
+                    with _tmp.NamedTemporaryFile(delete=False, suffix=".key") as kf:
+                        kf.write(_b64.b64decode(key_b64))
+                        _key_f = kf.name
+                    vks_ctx.load_cert_chain(_cert_f, _key_f)
+                except Exception:
+                    pass
+
+            vks_base = f"{vks_host}:{vks_port}"
+            vks_hdr  = ({"Authorization": f"Bearer {bearer}", "Accept": "application/json"}
+                        if bearer else {"Accept": "application/json"})
+            vks_req  = dict(verify=False, timeout=10)
+            if _cert_f and _key_f:
+                vks_req["cert"] = (_cert_f, _key_f)
+
+            _vks_cert_tuple = (_cert_f, _key_f) if (_cert_f and _key_f) else None
+            try:
+                exec_ns2, exec_pod2, exec_tool2 = _k8s_find_exec_pod(
+                    vks_base, vks_hdr, host_network_only=True,
+                    ssl_ctx=vks_ctx, req_cert=_vks_cert_tuple)
+                if not exec_pod2:
+                    exec_ns2, exec_pod2, exec_tool2 = _k8s_find_exec_pod(
+                        vks_base, vks_hdr, host_network_only=False,
+                        ssl_ctx=vks_ctx, req_cert=_vks_cert_tuple)
+
+                if not exec_pod2:
+                    _vks_err("No exec-capable pod found in VKS cluster — "
+                             "all pods may be distroless with no network tools.")
+                else:
+                    res2 = _tcp_test_via_exec(
+                        vks_base, vks_hdr, exec_ns2, exec_pod2, exec_tool2,
+                        supervisor_vip, 6443, ssl_ctx=vks_ctx)
+                    pd2 = requests.get(
+                        f"https://{vks_base}/api/v1/namespaces/{exec_ns2}/pods/{exec_pod2}",
+                        headers=vks_hdr, verify=False, timeout=5,
+                        **({} if not _vks_cert_tuple else {"cert": _vks_cert_tuple}))
+                    pod_spec2  = pd2.json().get("spec", {}) if pd2.ok else {}
+                    is_hn2     = pod_spec2.get("hostNetwork", False)
+                    node_name2 = pod_spec2.get("nodeName", "")
+                    node_tag2  = f" node:{node_name2}" if node_name2 else ""
+                    grp3["rows"].append({
+                        "source": (f"VKS '{cname}' Node{node_tag2} — pod {exec_pod2} "
+                                   f"({exec_ns2}{'  hostNetwork' if is_hn2 else '  podNetwork'})"),
+                        "destination": f"Supervisor VIP ({supervisor_vip}):6443",
+                        "method": "exec",
+                        "probe": res2.get("method_used", ""),
+                        "ok": res2["ok"],
+                        "note": res2.get("output", ""),
+                        "error": res2.get("error"),
+                    })
+            finally:
+                for _f in (_cert_f, _key_f):
+                    if _f:
+                        try:
+                            import os as _osc
+                            _osc.unlink(_f)
+                        except Exception:
+                            pass
+
+        out["groups"].append(grp3)
+        out["success"] = True
+
+    except requests.HTTPError as e:
+        out["error"] = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+    except Exception as e:
+        out["error"] = str(e)
+
+    return jsonify(out)
 
 
 @app.route("/api/supervisor-status", methods=["POST"])

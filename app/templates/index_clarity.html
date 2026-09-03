@@ -568,6 +568,127 @@
             </template>
           </div>
 
+          <!-- ── VKS Clusters ──────────────────────────────────────────── -->
+          <template x-if="installResult && installResult.installed &&
+                          installResult.clusters && installResult.clusters[0] &&
+                          installResult.clusters[0].config_status === 'RUNNING'">
+            <div class="card fade-in" style="margin-bottom:1rem;">
+              <div class="card-header" style="justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
+                <span style="font-size:0.82rem; font-weight:600; color:#2b2b2b;">
+                  <i class="fas fa-dharmachakra" style="color:#0072a3; margin-right:0.35rem;"></i>
+                  VKS Clusters (Tanzu Kubernetes)
+                </span>
+                <button @click="loadVksClusters()"
+                        :disabled="vks.loading"
+                        class="btn btn-outline btn-sm"
+                        style="font-size:0.72rem; padding:0.2rem 0.65rem;">
+                  <i :class="vks.loading ? 'fas fa-circle-notch fa-spin' : 'fas fa-rotate-right'"
+                     style="margin-right:0.25rem;"></i>
+                  <span x-text="vks.loading ? 'Loading…' : (vks.clusters.length || vks.done ? 'Refresh' : 'List VKS Clusters')"></span>
+                </button>
+              </div>
+              <div class="card-block" style="padding-top:0.5rem;">
+                <!-- Credentials row -->
+                <div style="display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap; margin-bottom:0.6rem;">
+                  <span style="font-size:0.72rem; color:#6e777b; white-space:nowrap;">Supervisor credentials:</span>
+                  <input type="text" x-model="vks.username"
+                         placeholder="administrator@wld.sso"
+                         style="font-size:0.72rem; padding:0.2rem 0.4rem; border:1px solid #dfe3e6; border-radius:3px; width:180px;"
+                         @keydown.enter="loadVksClusters()">
+                  <div style="position:relative;">
+                    <input :type="vks.showPwd ? 'text' : 'password'" x-model="vks.password"
+                           placeholder="password"
+                           style="font-size:0.72rem; padding:0.2rem 1.4rem 0.2rem 0.4rem; border:1px solid #dfe3e6; border-radius:3px; width:140px;"
+                           @keydown.enter="loadVksClusters()">
+                    <button @click="vks.showPwd = !vks.showPwd" type="button"
+                            style="position:absolute;right:3px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:0;">
+                      <i :class="vks.showPwd ? 'fas fa-eye-slash' : 'fas fa-eye'" style="color:#6e777b;font-size:10px;"></i>
+                    </button>
+                  </div>
+                  <span style="font-size:0.68rem; color:#6e777b; font-style:italic;">
+                    (may differ from vCenter — e.g. <code>administrator@wld.sso</code>)
+                  </span>
+                </div>
+                <!-- Supervisor VIP summary — shown once data is loaded -->
+                <template x-if="vks.done && vks.supervisor_vip">
+                  <p style="font-size:0.72rem; color:#6e777b; margin:0 0 0.5rem 0;">
+                    <i class="fas fa-circle-nodes" style="margin-right:0.3rem; color:#0072a3;"></i>
+                    <span x-text="'Supervisor VIP: ' + vks.supervisor_vip + ' — ' + vks.clusters.length + ' cluster(s) across ' + vks.namespaces.length + ' namespace(s)'"></span>
+                  </p>
+                </template>
+
+                <!-- Error -->
+                <template x-if="vks.error">
+                  <div class="alert alert-danger alert-sm" style="margin-bottom:0.5rem;">
+                    <div class="alert-items"><div class="alert-item static">
+                      <i class="fas fa-triangle-exclamation" style="margin-right:0.3rem;"></i>
+                      <span x-text="vks.error"></span>
+                    </div></div>
+                  </div>
+                </template>
+
+                <!-- No clusters yet -->
+                <template x-if="!vks.loading && !vks.error && vks.done && vks.clusters.length === 0">
+                  <p style="font-size:0.82rem; color:#6e777b; margin:0;">No VKS clusters found across all namespaces.</p>
+                </template>
+
+                <!-- Cluster table -->
+                <template x-if="vks.clusters.length > 0">
+                  <div style="overflow-x:auto;">
+                    <table style="width:100%; border-collapse:collapse; font-size:0.78rem;">
+                      <thead>
+                        <tr style="background:#f3f6fa; border-bottom:1px solid #dfe3e6;">
+                          <th style="padding:0.35rem 0.6rem; text-align:left; font-weight:600; color:#4a5568; white-space:nowrap;">Namespace</th>
+                          <th style="padding:0.35rem 0.6rem; text-align:left; font-weight:600; color:#4a5568; white-space:nowrap;">Cluster Name</th>
+                          <th style="padding:0.35rem 0.6rem; text-align:left; font-weight:600; color:#4a5568; white-space:nowrap;">Phase</th>
+                          <th style="padding:0.35rem 0.6rem; text-align:left; font-weight:600; color:#4a5568; white-space:nowrap;">K8s Version</th>
+                          <th style="padding:0.35rem 0.6rem; text-align:left; font-weight:600; color:#4a5568; white-space:nowrap;">Control Plane VIP</th>
+                          <th style="padding:0.35rem 0.6rem; text-align:left; font-weight:600; color:#4a5568; white-space:nowrap;">Workers</th>
+                          <th style="padding:0.35rem 0.6rem; text-align:center; font-weight:600; color:#4a5568; white-space:nowrap;">Connectivity</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <template x-for="(c, i) in vks.clusters" :key="c.namespace + '/' + c.name">
+                          <tr :style="i % 2 === 0 ? '' : 'background:#f9fafb;'"
+                              style="border-bottom:1px solid #eef0f2;">
+                            <td style="padding:0.35rem 0.6rem; font-family:monospace; font-size:0.73rem;" x-text="c.namespace"></td>
+                            <td style="padding:0.35rem 0.6rem; font-weight:600;" x-text="c.name"></td>
+                            <td style="padding:0.35rem 0.6rem;">
+                              <span :class="c.phase === 'Provisioned' ? 'label label-success' :
+                                            c.phase === 'Provisioning' ? 'label label-warning' :
+                                            c.phase === 'Failed' ? 'label label-danger' : 'label'"
+                                    style="font-size:0.65rem;"
+                                    x-text="c.phase"></span>
+                            </td>
+                            <td style="padding:0.35rem 0.6rem; font-family:monospace; font-size:0.73rem;" x-text="c.kubernetes_version || '—'"></td>
+                            <td style="padding:0.35rem 0.6rem; font-family:monospace; font-size:0.73rem;" x-text="c.control_plane_vip || '—'"></td>
+                            <td style="padding:0.35rem 0.6rem; text-align:center;" x-text="c.worker_replicas ?? '—'"></td>
+                            <td style="padding:0.25rem 0.6rem; text-align:center;">
+                              <button @click="testConnectivity(c)"
+                                      :disabled="vks.ct.loading && vks.ct.cluster === c.name"
+                                      :style="`font-size:0.68rem; padding:0.15rem 0.5rem; border:none; border-radius:3px; cursor:pointer; white-space:nowrap; color:#fff;
+                                        background:${(vks.ct.loading && vks.ct.cluster === c.name) ? '#0072a3'
+                                          : (vks.clusterStatus[c.name] === 'ok')  ? '#318700'
+                                          : (vks.clusterStatus[c.name] === 'fail') ? '#c21d00'
+                                          : '#737373'};`">
+                                <i :class="(vks.ct.loading && vks.ct.cluster === c.name) ? 'fas fa-circle-notch fa-spin' : 'fas fa-network-wired'"
+                                   style="margin-right:0.2rem; font-size:0.65rem;"></i>
+                                <span x-text="(vks.ct.loading && vks.ct.cluster === c.name) ? 'Testing…' : 'Test'"></span>
+                              </button>
+                            </td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                </template>
+
+                <!-- inline content ends here; results are in the modal below -->
+
+              </div>
+            </div>
+          </template>
+
           <!-- ── Deployment Options Info (when Supervisor is RUNNING, before requirements check) ──── -->
           <template x-if="installResult && installResult.installed && installResult.clusters.length && !hasResults()">
             <div class="fade-in" style="margin-bottom:1.2rem;">
@@ -2827,6 +2948,136 @@
     </div>
   </div>
 
+  <!-- ── Connectivity Test Modal ──────────────────────────────────────────── -->
+  <div x-show="vks.ct.show" x-cloak
+       style="position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:9000;
+              display:flex; align-items:center; justify-content:center; padding:1rem;">
+    <div style="background:#fff; border-radius:6px; box-shadow:0 8px 40px rgba(0,0,0,0.25);
+                width:100%; max-width:1000px; max-height:90vh; overflow-y:auto;">
+
+      <!-- Header -->
+      <div style="display:flex; align-items:center; justify-content:space-between;
+                  padding:0.75rem 1rem; border-bottom:1px solid #dfe3e6;">
+        <span style="font-size:0.9rem; font-weight:700; color:#2b2b2b;">
+          <i class="fas fa-network-wired" style="color:#0072a3; margin-right:0.4rem;"></i>
+          Connectivity Test
+          <span x-show="vks.ct.cluster" style="font-weight:400; font-size:0.78rem; color:#6e777b; margin-left:0.4rem;"
+                x-text="'— VKS cluster: ' + vks.ct.cluster"></span>
+        </span>
+        <button @click="vks.ct.show = false" style="background:none; border:none; cursor:pointer; font-size:1.1rem; color:#6e777b;">✕</button>
+      </div>
+
+      <!-- Body -->
+      <div style="padding:1rem;">
+
+        <!-- Loading spinner -->
+        <template x-if="vks.ct.loading">
+          <div style="display:flex; align-items:center; gap:0.6rem; padding:1.5rem 0; justify-content:center; color:#0072a3;">
+            <i class="fas fa-circle-notch fa-spin" style="font-size:1.2rem;"></i>
+            <span style="font-size:0.85rem;">Running connectivity tests… (may take 20–30 s for exec tests)</span>
+          </div>
+        </template>
+
+        <!-- Error -->
+        <template x-if="vks.ct.error">
+          <div class="alert alert-danger alert-sm" style="margin-bottom:0.8rem;">
+            <div class="alert-items"><div class="alert-item static">
+              <i class="fas fa-triangle-exclamation" style="margin-right:0.3rem;"></i>
+              <span x-text="vks.ct.error"></span>
+            </div></div>
+          </div>
+        </template>
+
+        <!-- Results -->
+        <template x-if="!vks.ct.loading && vks.ct.done && vks.ct.groups.length > 0">
+          <div>
+            <!-- legend removed -->
+
+            <template x-for="grp in vks.ct.groups" :key="grp.id">
+              <div style="margin-bottom:1rem;">
+                <div style="font-size:0.8rem; font-weight:700; color:#2b2b2b; margin-bottom:0.45rem;" x-text="grp.title"></div>
+
+                <table style="width:100%; border-collapse:collapse; font-size:0.75rem; table-layout:fixed;">
+                  <colgroup>
+                    <col style="width:48px;">   <!-- ✓/✗ icon -->
+                    <col style="width:34%;">    <!-- Source -->
+                    <col style="width:34%;">    <!-- Destination -->
+                    <col>                       <!-- Result — takes remaining space -->
+                  </colgroup>
+                  <thead>
+                    <tr style="background:#f3f6fa; border-bottom:1px solid #dfe3e6;">
+                      <th style="padding:0.28rem 0.5rem; text-align:center;">Result</th>
+                      <th style="padding:0.28rem 0.5rem; text-align:left; font-weight:600; color:#4a5568;">Source</th>
+                      <th style="padding:0.28rem 0.5rem; text-align:left; font-weight:600; color:#4a5568;">Destination</th>
+                      <th style="padding:0.28rem 0.5rem; text-align:left; font-weight:600; color:#4a5568;">Result</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="(row, ri) in grp.rows" :key="ri">
+                      <tr :style="ri % 2 === 0 ? '' : 'background:#f9fafb;'" style="border-bottom:1px solid #eef0f2;">
+                        <td style="padding:0.3rem 0.5rem; text-align:center;">
+                          <template x-if="row.ok === true">
+                            <i class="fas fa-circle-check" style="color:#318700; font-size:0.95rem;"></i>
+                          </template>
+                          <template x-if="row.ok === false">
+                            <i class="fas fa-circle-xmark" style="color:#c21d00; font-size:0.95rem;"></i>
+                          </template>
+                          <template x-if="row.ok === null || row.ok === undefined">
+                            <i class="fas fa-circle-minus" style="color:#9a9a9a; font-size:0.95rem;"></i>
+                          </template>
+                        </td>
+                        <td style="padding:0.3rem 0.5rem; color:#4a5568; font-size:0.72rem;">
+                          <template x-if="row.source.includes(' — pod ')">
+                            <span>
+                              <span x-text="row.source.split(' — pod ')[0].replace(/ node:[^\s]+/, '')"></span><br>
+                              <span style="color:#6e777b; font-style:italic;" x-text="'using pod ' + row.source.split(' — pod ')[1].replace(/\s*\(.*?\)\s*$/, '')"></span>
+                            </span>
+                          </template>
+                          <template x-if="!row.source.includes(' — pod ')">
+                            <span x-text="row.source"></span>
+                          </template>
+                        </td>
+                        <td style="padding:0.3rem 0.5rem; font-family:monospace; font-size:0.71rem;" x-text="row.destination"></td>
+                        <td style="padding:0.3rem 0.5rem;">
+                          <!-- TCP -->
+                          <template x-if="row.method === 'tcp'">
+                            <span>
+                              <template x-if="row.ok">
+                                <span style="color:#318700; font-size:0.72rem; font-weight:600;">ok</span>
+                              </template>
+                              <template x-if="!row.ok">
+                                <span style="color:#c21d00; font-size:0.72rem;" x-text="row.error"></span>
+                              </template>
+                            </span>
+                          </template>
+                          <!-- Exec -->
+                          <template x-if="row.method === 'exec'">
+                            <span>
+                              <template x-if="row.ok === true">
+                                <span style="color:#318700; font-size:0.72rem; font-weight:600;">ok</span>
+                              </template>
+                              <template x-if="row.ok === false">
+                                <span style="color:#c21d00; font-size:0.72rem;" x-text="row.error || row.note || 'FAIL'"></span>
+                              </template>
+                              <template x-if="row.ok === null || row.ok === undefined">
+                                <span style="color:#9a9a9a; font-size:0.72rem;" x-text="row.note || row.error || '—'"></span>
+                              </template>
+                            </span>
+                          </template>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+          </div>
+        </template>
+
+      </div><!-- /body -->
+    </div><!-- /modal-box -->
+  </div><!-- /overlay -->
+
   <!-- ── MTU Check Modal ───────────────────────────────────────────────── -->
   <div x-show="mtuModal.show" x-cloak
        x-transition:enter="transition ease-out duration-200"
@@ -3366,6 +3617,11 @@
       },
       vlanResult: null,   // null | 'pass' | 'fail'
 
+      vks: { loading: false, done: false, clusters: [], namespaces: [], supervisor_vip: '', error: null,
+             username: '', password: '', showPwd: false, clusterStatus: {},
+             ct: { loading: false, done: false, error: null, groups: [], server_ip: '',
+                   supervisor_vip: '', cluster: '', show: false } },
+
       showDiagram: false, // lightbox for architecture diagram
       diagImg: '/static/nsx-vpc-distributed.jpg?v=4',
       diagDrag: { active: false, offsetX: 0, offsetY: 0, x: null, y: null },
@@ -3446,6 +3702,10 @@
         this.showReqBtn    = false;
         this.modes         = { distributed: [], centralized: [], vds_flb: [] };
         this.selectedMode  = null;
+        this.vks           = { loading: false, done: false, clusters: [], namespaces: [], supervisor_vip: '', error: null,
+                               username: '', password: '', showPwd: false, clusterStatus: {},
+                               ct: { loading: false, done: false, error: null, groups: [], server_ip: '',
+                                     supervisor_vip: '', cluster: '', show: false } };
         this.showInstallWizard = false;
         this.wizardStep    = 0;
         document.querySelectorAll('.req-cols .card-header, .req-cols .pros-cons-section')
@@ -3544,6 +3804,81 @@
           this.loadingReq = false;
           this.loading    = false;
           this.equalizeColRows();
+        }
+      },
+
+      // ── VKS Clusters ─────────────────────────────────────────────────
+      async loadVksClusters() {
+        this.vks.loading = true;
+        this.vks.error   = null;
+        try {
+          const payload = {
+            ...this.form,
+            sup_username: this.vks.username || this.form.username,
+            sup_password: this.vks.password || this.form.password,
+          };
+          const r = await fetch('/api/vks-clusters', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+          });
+          const d = await r.json();
+          if (d.success) {
+            this.vks.clusters       = d.clusters || [];
+            this.vks.namespaces     = d.namespaces || [];
+            this.vks.supervisor_vip = d.supervisor_vip || '';
+          } else {
+            this.vks.error = d.error || 'Unknown error';
+          }
+        } catch (e) {
+          this.vks.error = String(e);
+        } finally {
+          this.vks.loading = false;
+          this.vks.done    = true;
+        }
+      },
+
+      // ── Connectivity Test ─────────────────────────────────────────────
+      async testConnectivity(cluster) {
+        this.vks.ct.loading = true;
+        this.vks.ct.done    = false;
+        this.vks.ct.error   = null;
+        this.vks.ct.groups  = [];
+        this.vks.ct.cluster = cluster ? cluster.name : '';
+        this.vks.ct.show    = true;   // open modal immediately (shows spinner)
+        try {
+          const payload = {
+            ...this.form,
+            sup_username: this.vks.username || this.form.username,
+            sup_password: this.vks.password || this.form.password,
+            cluster_name:      cluster ? cluster.name      : '',
+            cluster_namespace: cluster ? cluster.namespace : '',
+            cluster_vip:       cluster ? (cluster.control_plane_vip || '') : '',
+          };
+          const r = await fetch('/api/connectivity-test', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+          });
+          const d = await r.json();
+          if (d.success) {
+            this.vks.ct.groups         = d.groups || [];
+            this.vks.ct.server_ip      = d.server_ip || '';
+            this.vks.ct.supervisor_vip = d.supervisor_vip || '';
+            // Derive overall pass/fail for the button colour
+            const allRows = (d.groups || []).flatMap(g => g.rows || []);
+            const anyFail = allRows.some(row => row.ok === false);
+            this.vks.clusterStatus[this.vks.ct.cluster] = anyFail ? 'fail' : 'ok';
+          } else {
+            this.vks.ct.error = d.error || 'Unknown error';
+            this.vks.clusterStatus[this.vks.ct.cluster] = 'fail';
+          }
+        } catch (e) {
+          this.vks.ct.error = String(e);
+          this.vks.clusterStatus[this.vks.ct.cluster] = 'fail';
+        } finally {
+          this.vks.ct.loading = false;
+          this.vks.ct.done    = true;
         }
       },
 
