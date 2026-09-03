@@ -138,6 +138,7 @@
     .status-chip.warnings     { background: #fdf5e0; color: #e07400; }
     .status-chip.issues       { background: #fae8e8; color: #c21d00; }
     .status-chip.to_validate  { background: #edf0f2; color: #6e777b; }
+    .status-chip.in_use       { background: #0072a3; color: #fff; }
     .status-chip.configuring  { background: #dce9f4; color: #0072a3; }
     .status-chip.running      { background: #dff0d0; color: #48960c; }
     .status-chip.error        { background: #fae8e8; color: #c21d00; }
@@ -624,10 +625,10 @@
 
                       <!-- Distributed -->
                       <div x-show="col.key === 'distributed'">
-                        <img src="/static/nsx-vpc-distributed.jpg?v=3"
+                        <img src="/static/nsx-vpc-distributed.jpg?v=4"
                              alt="NSX-VPC Distributed Architecture"
                              title="Click to enlarge"
-                             @click="showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
+                             @click="diagImg='/static/nsx-vpc-distributed.jpg?v=4'; showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
                              style="width:100%; max-height:80px; object-fit:cover; object-position:top; border-radius:4px; border:1px solid #dfe3e6; cursor:zoom-in; margin-bottom:0.45rem; display:block;">
                         <div class="pc-label">Pros</div>
                         <div class="pc-item">· Simple design - No Edge Node / Tier-0 / BGP</div>
@@ -641,6 +642,11 @@
 
                       <!-- Centralized -->
                       <div x-show="col.key === 'centralized'">
+                        <img src="/static/nsx-vpc-centralized.jpg?v=1"
+                             alt="NSX-VPC Centralized Architecture"
+                             title="Click to enlarge"
+                             @click="diagImg='/static/nsx-vpc-centralized.jpg?v=1'; showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
+                             style="width:100%; max-height:80px; object-fit:cover; object-position:top; border-radius:4px; border:1px solid #dfe3e6; cursor:zoom-in; margin-bottom:0.45rem; display:block;">
                         <div class="pc-label">Pros</div>
                         <div class="pc-item">· Full VCF-Automation support</div>
                         <div class="pc-item">· Fewer physical fabric IP consumption - K8s nodes use logical private IPs</div>
@@ -651,6 +657,11 @@
 
                       <!-- VDS / FLB -->
                       <div x-show="col.key === 'vds_flb'">
+                        <img src="/static/vds.jpg?v=1"
+                             alt="VDS Architecture"
+                             title="Click to enlarge"
+                             @click="diagImg='/static/vds.jpg?v=1'; showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
+                             style="width:100%; max-height:80px; object-fit:cover; object-position:top; border-radius:4px; border:1px solid #dfe3e6; cursor:zoom-in; margin-bottom:0.45rem; display:block;">
                         <div class="pc-label">Pros</div>
                         <div class="pc-item">· Simple design — no NSX required</div>
                         <div class="pc-label pc-label-gap pc-label-cons">Cons</div>
@@ -698,12 +709,13 @@
                     </div>
                     <span class="status-chip"
                           :class="{
-                            'ready':        overallFor(col.key) === 'ready',
-                            'warnings':     overallFor(col.key) === 'warnings',
-                            'issues':       overallFor(col.key) === 'issues',
-                            'to_validate':  overallFor(col.key) === 'to_validate'
+                            'in_use':       activeColKey() === col.key,
+                            'ready':        activeColKey() !== col.key && overallFor(col.key) === 'ready',
+                            'warnings':     activeColKey() !== col.key && overallFor(col.key) === 'warnings',
+                            'issues':       activeColKey() !== col.key && overallFor(col.key) === 'issues',
+                            'to_validate':  activeColKey() !== col.key && overallFor(col.key) === 'to_validate'
                           }"
-                          x-text="{ ready:'Ready', warnings:'Warnings', issues:'Issues', to_validate:'To Validate' }[overallFor(col.key)] || ''">
+                          x-text="activeColKey() === col.key ? 'In Use' : ({ ready:'Ready', warnings:'Warnings', issues:'Missing Reqs', to_validate:'To Validate' }[overallFor(col.key)] || '')">
                     </span>
                   </div>
 
@@ -711,10 +723,10 @@
                   <div class="pros-cons-section">
                     <!-- Distributed -->
                     <div x-show="col.key === 'distributed'">
-                      <img src="/static/nsx-vpc-distributed.jpg?v=3"
+                      <img src="/static/nsx-vpc-distributed.jpg?v=4"
                            alt="NSX-VPC Distributed Architecture"
                            title="Click to enlarge"
-                           @click="showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
+                           @click="diagImg='/static/nsx-vpc-distributed.jpg?v=4'; showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
                            style="width:100%; max-height:80px; object-fit:cover; object-position:top; border-radius:4px; border:1px solid #dfe3e6; cursor:zoom-in; margin-bottom:0.45rem; display:block;">
                       <div class="pc-label">Pros</div>
                       <div class="pc-item">· Simple design - No Edge Node / Tier-0 / BGP</div>
@@ -727,6 +739,11 @@
                     </div>
                     <!-- Centralized -->
                     <div x-show="col.key === 'centralized'">
+                      <img src="/static/nsx-vpc-centralized.jpg?v=1"
+                           alt="NSX-VPC Centralized Architecture"
+                           title="Click to enlarge"
+                           @click="diagImg='/static/nsx-vpc-centralized.jpg?v=1'; showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
+                           style="width:100%; max-height:80px; object-fit:cover; object-position:top; border-radius:4px; border:1px solid #dfe3e6; cursor:zoom-in; margin-bottom:0.45rem; display:block;">
                       <div class="pc-label">Pros</div>
                       <div class="pc-item">· Full VCF-Automation support</div>
                       <div class="pc-item">· Fewer physical fabric IP consumption - K8s nodes use logical private IPs</div>
@@ -736,6 +753,11 @@
                     </div>
                     <!-- VDS / FLB -->
                     <div x-show="col.key === 'vds_flb'">
+                      <img src="/static/vds.jpg?v=1"
+                           alt="VDS Architecture"
+                           title="Click to enlarge"
+                           @click="diagImg='/static/vds.jpg?v=1'; showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
+                           style="width:100%; max-height:80px; object-fit:cover; object-position:top; border-radius:4px; border:1px solid #dfe3e6; cursor:zoom-in; margin-bottom:0.45rem; display:block;">
                       <div class="pc-label">Pros</div>
                       <div class="pc-item">· Simple design — no NSX required</div>
                       <div class="pc-label pc-label-gap pc-label-cons">Cons</div>
@@ -768,7 +790,7 @@
                           <div style="flex:1; min-width:0;">
                             <!-- Title row: badge + name (full width, never compressed) -->
                             <div style="display:flex; align-items:center; gap:0.35rem; flex-wrap:wrap;">
-                              <span class="step-badge" x-text="check.step === 'Auth' ? 'Auth' : 'S' + check.step"></span>
+                              <span class="step-badge" x-text="check.step === 'Auth' ? 'Auth' : 'R' + check.step"></span>
                               <p style="font-weight:700; font-size:0.85rem; color:#2b2b2b; line-height:1.3; margin:0;"
                                  x-text="check.name"></p>
                             </div>
@@ -809,7 +831,7 @@
                                   <i :class="vlanResult === 'pass' ? 'fas fa-check-circle'
                                             : vlanResult === 'fail' ? 'fas fa-times-circle'
                                             : 'fas fa-ethernet'"
-                                     style="margin-right:0.25rem;"></i>Check VLAN
+                                     style="margin-right:0.25rem;"></i>Check Ext. Conn.
                                 </button>
                               </div>
                             </template>
@@ -1070,7 +1092,7 @@
                       <p style="font-size:0.75rem; font-weight:600; margin:0;"
                          :class="{ 'clr-ok': overallFor(col.key)==='ready', 'clr-warn': overallFor(col.key)==='warnings', 'clr-error': overallFor(col.key)==='issues' }"
                          :style="overallFor(col.key)==='to_validate' ? 'color:#6e777b;' : ''"
-                         x-text="{ ready:'All requirements met', warnings:'Review warnings', issues:'Requirements missing', to_validate:'To Validate' }[overallFor(col.key)] || ''">
+                         x-text="{ ready:'All requirements met', warnings:'Review warnings', issues:'Missing requirements', to_validate:'To Validate' }[overallFor(col.key)] || ''">
                       </p>
                       <!-- VDS/FLB: always disabled -->
                       <template x-if="showReqBtn && col.key === 'vds_flb'">
@@ -1125,8 +1147,8 @@
                         <span x-text="loadingReq ? 'Checking…' : 'Re-check Requirements'"></span>
                       </button>
                       <span class="status-chip"
-                            :class="{ ready: overallFor(col.key)==='ready', warnings: overallFor(col.key)==='warnings', issues: overallFor(col.key)==='issues', to_validate: overallFor(col.key)==='to_validate' }"
-                            x-text="{ ready:'Ready', warnings:'Warnings', issues:'Issues', to_validate:'To Validate' }[overallFor(col.key)] || ''">
+                            :class="{ in_use: activeColKey()===col.key, ready: activeColKey()!==col.key && overallFor(col.key)==='ready', warnings: activeColKey()!==col.key && overallFor(col.key)==='warnings', issues: activeColKey()!==col.key && overallFor(col.key)==='issues', to_validate: activeColKey()!==col.key && overallFor(col.key)==='to_validate' }"
+                            x-text="activeColKey()===col.key ? 'In Use' : ({ ready:'Ready', warnings:'Warnings', issues:'Missing Reqs', to_validate:'To Validate' }[overallFor(col.key)] || '')">
                       </span>
                     </div>
                   </div>
@@ -1148,7 +1170,7 @@
                           <div style="flex:1; min-width:0;">
                             <!-- Title row -->
                             <div style="display:flex; align-items:center; gap:0.35rem; flex-wrap:wrap;">
-                              <span class="step-badge" x-text="check.step === 'Auth' ? 'Auth' : 'S' + check.step"></span>
+                              <span class="step-badge" x-text="check.step === 'Auth' ? 'Auth' : 'R' + check.step"></span>
                               <p style="font-weight:700; font-size:0.85rem; color:#2b2b2b; line-height:1.3; margin:0;" x-text="check.name"></p>
                             </div>
                             <!-- Check MTU button -->
@@ -1171,7 +1193,7 @@
                                           background: vlanResult==='pass' ? '#48960c' : vlanResult==='fail' ? '#c92100' : '#89a0a8',
                                           borderColor: vlanResult==='pass' ? '#48960c' : vlanResult==='fail' ? '#c92100' : '#89a0a8' }">
                                   <i :class="vlanResult==='pass' ? 'fas fa-check-circle' : vlanResult==='fail' ? 'fas fa-times-circle' : 'fas fa-sitemap'"
-                                     style="margin-right:0.25rem;"></i>Check VLAN
+                                     style="margin-right:0.25rem;"></i>Check Ext. Conn.
                                 </button>
                               </div>
                             </template>
@@ -3003,7 +3025,7 @@
           </button>
           <h3 class="modal-title">
             <i class="fas fa-ethernet" style="margin-right:0.4rem;"></i>
-            Check VLAN — Distributed External Connection
+            Check Distributed External Connection
           </h3>
         </div>
 
@@ -3302,6 +3324,7 @@
       showNsx:        false,
       showPwd:        false,
       showNsxPwd:     false,
+      activeModeKey:  null,  // column key for the currently deployed/deploying Supervisor
       loading:        false,
       loadingInstalled: false,
       loadingReq:     false,
@@ -3344,6 +3367,7 @@
       vlanResult: null,   // null | 'pass' | 'fail'
 
       showDiagram: false, // lightbox for architecture diagram
+      diagImg: '/static/nsx-vpc-distributed.jpg?v=4',
       diagDrag: { active: false, offsetX: 0, offsetY: 0, x: null, y: null },
 
       // ── Install Wizard ─────────────────────────────────────────────────
@@ -3402,8 +3426,23 @@
         return 'ready';
       },
 
+      activeColKey() {
+        // Prefer the explicitly stored key (set in checkInstalled, survives re-checks).
+        if (this.activeModeKey) return this.activeModeKey;
+        // Fallback: read directly from installResult
+        if (!this.installResult?.installed) return null;
+        for (const c of (this.installResult.clusters || [])) {
+          const m = (c.network_mode || '');
+          if (m.includes('Distributed'))                       return 'distributed';
+          if (m.includes('Centralized'))                       return 'centralized';
+          if (m === 'VDS / FLB' || m === 'VSPHERE_NETWORK')   return 'vds_flb';
+        }
+        return null;
+      },
+
       reset() {
         this.installResult = null;
+        this.activeModeKey = null;
         this.showReqBtn    = false;
         this.modes         = { distributed: [], centralized: [], vds_flb: [] };
         this.selectedMode  = null;
@@ -3443,9 +3482,10 @@
 
       async checkInstalled() {
         if (!this.form.vc_url || !this.form.password) return;
+        if (this.loadingInstalled) return;  // prevent concurrent calls
         this.loadingInstalled = true;
         this.loading          = true;
-        this.installResult    = null;
+        // Do NOT clear installResult here — keep showing current state until new data arrives.
         this.showReqBtn       = false;
         this.reqResults       = [];
         try {
@@ -3456,6 +3496,15 @@
           });
           const d = await r.json();
           this.installResult = d;
+          // Only update activeModeKey when the supervisor is confirmed installed.
+          // Never clear it on a transient false result — only reset() clears it.
+          if (d.installed) {
+            const _nm = (d.clusters || []).map(c => c.network_mode).find(Boolean) || '';
+            this.activeModeKey = _nm.includes('Distributed') ? 'distributed'
+                               : _nm.includes('Centralized') ? 'centralized'
+                               : (_nm === 'VDS / FLB' || _nm === 'VSPHERE_NETWORK') ? 'vds_flb'
+                               : null;
+          }
           if (d.success && !d.installed) this.showReqBtn = true;
           if (d.success && d.installed) this.equalizeColRows();
           // Auto-run requirements check whenever we have a successful connection,
@@ -3465,7 +3514,7 @@
           this.installResult = {error: String(e)};
         } finally {
           this.loadingInstalled = false;
-          this.loading          = false;
+          if (!this.loadingReq) this.loading = false;  // don't clear loading while requirements check is still running
         }
       },
 
@@ -3860,9 +3909,9 @@
             running: false,
             done:    false,
             steps: [
-              {label: 'S5-2 — Distributed Transit Gateway attachment', status: 'pending', error: null},
-              {label: 'S5-3 — External IP Block (dist-ext-ip-block-1)',  status: 'pending', error: null},
-              {label: 'S5-4 — VPC Connectivity Profile',                 status: 'pending', error: null},
+              {label: 'R5-2 — Distributed Transit Gateway attachment', status: 'pending', error: null},
+              {label: 'R5-3 — External IP Block (dist-ext-ip-block-1)',  status: 'pending', error: null},
+              {label: 'R5-4 — VPC Connectivity Profile',                 status: 'pending', error: null},
             ]
           };
           // Pre-fetch VNA clusters so the user can pick one in the form
@@ -4590,8 +4639,8 @@
                        font-size:1rem; font-weight:700; line-height:1; padding:0 2px;
                        opacity:0.85;" aria-label="Close">×</button>
       </div>
-      <img src="/static/nsx-vpc-distributed.jpg?v=3"
-           alt="NSX-VPC Distributed Architecture"
+      <img :src="diagImg"
+           alt="Architecture Diagram"
            style="max-width:56vw; max-height:84vh; border-radius:0 0 6px 6px;
                   box-shadow:0 12px 48px rgba(0,0,0,0.55); display:block;
                   border:2px solid rgba(255,255,255,0.15); border-top:none;">

@@ -913,7 +913,7 @@ def check_requirements():
                     if mode == "distributed":
                         if not dvlan_nets:
                             ext_detail = (
-                                "No Distributed External Connection found (Step S5-1).\n"
+                                "No Distributed External Connection found (Step R5-1).\n"
                                 "An External IP Block for Distributed mode requires a Distributed External Connection first —\n"
                                 "its CIDR must match that connection's gateway subnet."
                             )
@@ -926,7 +926,7 @@ def check_requirements():
                                                 " but their CIDR does not match any Distributed External Connection subnet.")
                             ext_detail = (
                                 "An External IP Block is required for future Supervisor VIP and NAT allocation.\n"
-                                "In the Distributed option, the CIDR must match the subnet from Step S5-1 "
+                                "In the Distributed option, the CIDR must match the subnet from Step R5-1 "
                                 "(Distributed External Connection)." + overlap_note + "\n"
                                 "This tool will guide you through the creation of an External IP Block."
                             )
@@ -1001,6 +1001,22 @@ def check_requirements():
                 valid_vcps = [v for v in all_vcps if is_valid(v)]
 
                 if valid_vcps:
+                    # Build path/id → display_name map for IP blocks so we show names, not IDs.
+                    _bname_map: dict = {}
+                    for _b in (d.get("ext_blocks", []) + d.get("int_blocks", [])):
+                        _b_path = _b.get("path", "")
+                        _b_dn   = _b.get("display_name") or _b.get("id", "")
+                        if _b_path:
+                            _bname_map[_b_path] = _b_dn
+                        if _b.get("id"):
+                            _bname_map[_b["id"]] = _b_dn
+
+                    def _b_display(path: str) -> str:
+                        if path in _bname_map:
+                            return _bname_map[path]
+                        seg = path.rstrip("/").split("/")[-1]
+                        return _bname_map.get(seg, seg)
+
                     lines = []
                     for v in valid_vcps:
                         sg  = (v.get("service_gateway") or {})
@@ -1008,7 +1024,7 @@ def check_requirements():
                         proj  = v.get("_proj_name", v.get("_proj_id", "?"))
                         name  = v.get("display_name", v.get("id", "?"))
                         tgw   = v.get("transit_gateway_path", "?").rstrip("/").split("/")[-1]
-                        ext_b = ", ".join(b.rstrip("/").split("/")[-1]
+                        ext_b = ", ".join(_b_display(b)
                                           for b in (v.get("external_ip_blocks") or []))
                         clu   = ", ".join(p.rstrip("/").split("/")[-1]
                                           for p in (sg.get("edge_cluster_paths") or []))
@@ -3562,7 +3578,7 @@ def check_vlan():
         dvlans = (nsx_get(nsx_url, nsx_user, nsx_pass,
             "/policy/api/v1/infra/distributed-vlan-connections") or {}).get("results", [])
         if not dvlans:
-            result["error"] = "No Distributed External Connection found — complete S5-1 first."
+            result["error"] = "No Distributed External Connection found — complete R5-1 first."
             return jsonify(result)
         dvlan = next((d for d in dvlans if d.get("id") == dvlan_id_req), dvlans[0])
         vlan_id    = dvlan.get("vlan_id", 0)
@@ -3599,7 +3615,7 @@ def check_vlan():
             except Exception:
                 pass
         if not block_cidr:
-            result["error"] = "No External IP Block matching the DVLAN subnet — complete S5-3 first."
+            result["error"] = "No External IP Block matching the DVLAN subnet — complete R5-3 first."
             return jsonify(result)
 
         # ── 3. Prepared ESX hosts + NSX VDS name ───────────────────────────
