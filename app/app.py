@@ -5307,5 +5307,184 @@ def vc_vpc_ipblocks_url():
     return jsonify({"url": fallback_url})
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Live Topology endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/topology', methods=['POST'])
+def build_topology():
+    """Return NSX network topology — searches global + per-project TGW scope."""
+    try:
+        data     = request.json or {}
+        nsx_url  = (data.get('nsx_url') or '').strip().rstrip('/')
+        nsx_user = data.get('nsx_user') or ''
+        nsx_pass = data.get('nsx_pass') or ''
+        nsx_auth = (nsx_user, nsx_pass)
+        base     = f"https://{nsx_url}/policy/api/v1"
+        s        = requests.Session()
+        s.verify = False
+        import ipaddress as _ipa
+
+        # ── Helper: resolve TGW attachments → (type, ext_conn) ──────────
+        def _resolve_tgw(tgw_prefix):
+            att_r = s.get(f"{tgw_prefix}/attachments", auth=nsx_auth, timeout=10)
+            atts  = att_r.json().get('results', []) if att_r.ok else []
+            ttype = None; ext_conn = None
+            for att in atts:
+                cp = att.get('connection_path', '') or ''   # ← correct field name
+
+                # ── Distributed: connection_path contains /distributed-vlan-connections/
+                if '/distributed-vlan-connections/' in cp:
+                    ttype = 'D'
+                    dvid  = cp.rstrip('/').split('/')[-1]
+                    dv_r  = s.get(f"{base}/infra/distributed-vlan-connections/{dvid}",
+                                  auth=nsx_auth, timeout=10)
+                    if dv_r.ok:
+                        d      = dv_r.json()
+                        subnet = (d.get('gateway_addresses') or [''])[0]
+                        try:
+                            net = _ipa.ip_interface(subnet).network
+                            gw  = str(list(net.hosts())[0])
+                        except Exception:
+                            gw = subnet.split('/')[0]
+                        ext_conn = dict(type='dvlan', name=d.get('display_name', dvid),
+                                        vlan=str(d.get('vlan_id', '')),
+                                        subnet=subnet, gateway_ip=gw)
+
+                # ── Centralized: connection_path contains /gateway-connections/
+                elif '/gateway-connections/' in cp:
+                    ttype = 'C'
+                    gc_r  = s.get(f"https://{nsx_url}/policy/api/v1{cp}",
+                                  auth=nsx_auth, timeout=10)
+                    t0_name = ''
+                    if gc_r.ok:
+                        t0_path = gc_r.json().get('tier0_path', '') or ''
+                        t0_id   = t0_path.rstrip('/').split('/')[-1] if t0_path else ''
+                        t0_r    = s.get(f"{base}/infra/tier-0s/{t0_id}",
+                                        auth=nsx_auth, timeout=10)
+                        t0_name = t0_r.json().get('display_name', t0_id) if t0_r.ok else t0_id
+                        # Enumerate ALL locale-services and collect ALL unique VLAN/GW pairs
+                        ls_r  = s.get(f"{base}/infra/tier-0s/{t0_id}/locale-services",
+                                      auth=nsx_auth, timeout=10)
+                        lsvcs = ls_r.json().get('results', []) if ls_r.ok else [{'id': 'default'}]
+                        seen_vlans = {}   # vlan_key → {vlan, subnet, gateway_ip}
+                        for ls in lsvcs:
+                            ls_id = ls.get('id', 'default')
+                            if_r  = s.get(
+                                f"{base}/infra/tier-0s/{t0_id}/locale-services/{ls_id}/interfaces",
+                                auth=nsx_auth, timeout=10)
+                            if not if_r.ok:
+                                continue
+                            for ifc in if_r.json().get('results', []):
+                                if ifc.get('type') != 'EXTERNAL':
+                                    continue
+                                # ── IP / subnet ─────────────────────────────────
+                                ifc_subnet = ''
+                                subs = ifc.get('subnets', [])
+                                if subs:
+                                    _ip  = subs[0].get('ip_addresses', [''])[0]
+                                    _pfx = subs[0].get('prefix_len', '')
+                                    ifc_subnet = f"{_ip}/{_pfx}" if _ip and _pfx else ''
+                                # ── VLAN: direct field → connected segment ──────
+                                ifc_vlan = str(ifc.get('vlan', '') or '')
+                                if not ifc_vlan:
+                                    seg_path = ifc.get('segment_path', '') or ''
+                                    if seg_path:
+                                        seg_id = seg_path.rstrip('/').split('/')[-1]
+                                        sg_r = s.get(f"{base}/infra/segments/{seg_id}",
+                                                     auth=nsx_auth, timeout=10)
+                                        if sg_r.ok:
+                                            vids = sg_r.json().get('vlan_ids', [])
+                                            ifc_vlan = str(vids[0]) if vids else ''
+                                # ── First host in subnet = physical router IP ────
+                                ifc_gw = ''
+                                try:
+                                    net    = _ipa.ip_interface(ifc_subnet).network
+                                    ifc_gw = str(list(net.hosts())[0])
+                                except Exception:
+                                    ifc_gw = ifc_subnet.split('/')[0]
+                                # Deduplicate by VLAN (or by subnet if no VLAN tag)
+                                dedup_key = ifc_vlan or ifc_subnet
+                                if dedup_key and dedup_key not in seen_vlans:
+                                    seen_vlans[dedup_key] = {
+                                        'vlan': ifc_vlan,
+                                        'subnet': ifc_subnet,
+                                        'gateway_ip': ifc_gw,
+                                    }
+                        vlans_list = list(seen_vlans.values())
+                        # Legacy single-value fallback (first entry)
+                        vlan   = vlans_list[0]['vlan']        if vlans_list else ''
+                        subnet = vlans_list[0]['subnet']      if vlans_list else ''
+                        gw     = vlans_list[0]['gateway_ip']  if vlans_list else ''
+                    else:
+                        vlans_list = []
+                        vlan = subnet = gw = ''
+                    ext_conn = dict(type='t0', name=t0_name,
+                                    vlan=vlan, subnet=subnet, gateway_ip=gw,
+                                    vlans=vlans_list)
+            return ttype, ext_conn
+
+        tgw_info    = {}   # id → {id, name, type, ext_conn}
+        vpc_tgw_map = {}   # vpc_display_name.lower() → {tgw_id, name}
+
+        # ── 1. Default-project TGWs  (correct path: no /infra/ segment) ─
+        #    e.g. /orgs/default/projects/default/transit-gateways
+        org_r    = s.get(f"{base}/orgs/default/projects", auth=nsx_auth, timeout=10)
+        projects = org_r.json().get('results', []) if org_r.ok else []
+
+        for proj in projects:
+            proj_id   = proj['id']
+            proj_base = f"{base}/orgs/default/projects/{proj_id}"
+
+            # TGWs in this project (path has NO /infra/ segment)
+            pt_r = s.get(f"{proj_base}/transit-gateways", auth=nsx_auth, timeout=10)
+            for tgw in (pt_r.json().get('results', []) if pt_r.ok else []):
+                tid = tgw['id']
+                if tid not in tgw_info:
+                    ttype, ext_conn = _resolve_tgw(
+                        f"{proj_base}/transit-gateways/{tid}")
+                    tgw_info[tid] = dict(id=tid, name=tgw.get('display_name', tid),
+                                         type=ttype, ext_conn=ext_conn)
+
+            # VPCs → map name → tgw_id
+            vpcs_r = s.get(f"{proj_base}/vpcs", auth=nsx_auth, timeout=10)
+            for vpc in (vpcs_r.json().get('results', []) if vpcs_r.ok else []):
+                vpc_name     = vpc.get('display_name', vpc['id'])
+                profile_path = vpc.get('vpc_connectivity_profile', '')
+                if not profile_path:
+                    continue
+                pr_r = s.get(f"https://{nsx_url}/policy/api/v1{profile_path}",
+                             auth=nsx_auth, timeout=10)
+                if pr_r.ok:
+                    tgw_path = pr_r.json().get('transit_gateway_path', '')
+                    tgw_id   = tgw_path.split('/')[-1] if tgw_path else ''
+                    if tgw_id:
+                        vpc_tgw_map[vpc_name.lower()] = {'tgw_id': tgw_id, 'name': vpc_name}
+
+        # ── 2. Also check legacy global path (some NSX versions) ─────────
+        gl_r = s.get(f"{base}/infra/transit-gateways", auth=nsx_auth, timeout=10)
+        for tgw in (gl_r.json().get('results', []) if gl_r.ok else []):
+            tid = tgw['id']
+            if tid not in tgw_info:
+                ttype, ext_conn = _resolve_tgw(f"{base}/infra/transit-gateways/{tid}")
+                tgw_info[tid] = dict(id=tid, name=tgw.get('display_name', tid),
+                                     type=ttype, ext_conn=ext_conn)
+
+        tgw_list = sorted(tgw_info.values(),
+                          key=lambda t: 0 if t.get('type') == 'D' else 1)
+        return jsonify({'success': True, 'tgws': tgw_list, 'vpc_tgw_map': vpc_tgw_map,
+                        '_debug': {
+                            'global_tgw_status': gl_r.status_code if gl_r.ok else f"FAIL-{gl_r.status_code}",
+                            'global_tgw_count':  len([t for t in tgw_info.values()]),
+                            'projects_status':   org_r.status_code if org_r.ok else f"FAIL-{org_r.status_code}",
+                            'projects_found':    [p['id'] for p in projects],
+                            'tgw_ids':           list(tgw_info.keys()),
+                        }})
+
+    except Exception as e:
+        import traceback
+        return jsonify({'success': False, 'error': str(e),
+                        'tb': traceback.format_exc()})
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=80, debug=False)

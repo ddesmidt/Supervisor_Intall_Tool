@@ -645,6 +645,7 @@
                           <th style="padding:0.35rem 0.6rem; text-align:left; font-weight:600; color:#4a5568; white-space:nowrap;">Control Plane VIP</th>
                           <th style="padding:0.35rem 0.6rem; text-align:left; font-weight:600; color:#4a5568; white-space:nowrap;">Workers</th>
                           <th style="padding:0.35rem 0.6rem; text-align:center; font-weight:600; color:#4a5568; white-space:nowrap;">Connectivity</th>
+                          <th style="padding:0.35rem 0.6rem; text-align:center; font-weight:600; color:#4a5568; white-space:nowrap;">Topology</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -674,6 +675,18 @@
                                 <i :class="(vks.ct.loading && vks.ct.cluster === c.name) ? 'fas fa-circle-notch fa-spin' : 'fas fa-network-wired'"
                                    style="margin-right:0.2rem; font-size:0.65rem;"></i>
                                 <span x-text="(vks.ct.loading && vks.ct.cluster === c.name) ? 'Testing…' : 'Test'"></span>
+                              </button>
+                            </td>
+                            <!-- Topology button -->
+                            <td style="padding:0.25rem 0.6rem; text-align:center;">
+                              <button @click="openTopology(c)"
+                                      :disabled="topo.loading && topo.cluster === c.name"
+                                      class="btn btn-sm"
+                                      style="font-size:0.68rem; padding:0.15rem 0.5rem;
+                                             background:#1565c0; color:#fff; border:none; border-radius:3px; cursor:pointer; white-space:nowrap;">
+                                <i :class="(topo.loading && topo.cluster === c.name) ? 'fas fa-circle-notch fa-spin' : 'fas fa-diagram-project'"
+                                   style="margin-right:0.2rem; font-size:0.65rem;"></i>
+                                <span x-text="(topo.loading && topo.cluster === c.name) ? 'Building…' : 'Topology'"></span>
                               </button>
                             </td>
                           </tr>
@@ -716,7 +729,7 @@
                   <div class="card" style="display:flex; flex-direction:column;"
                        :style="installResult.clusters.some(c => c.network_mode === col.mode)
                                ? 'border:2px solid #0072a3; box-shadow:0 0 0 3px rgba(0,114,163,.1);'
-                               : ''">
+                               : (activeColKey() ? 'opacity:0.38; filter:grayscale(60%); pointer-events:none;' : '')">
 
                     <!-- Column header: title row + badge row -->
                     <div class="card-header" style="justify-content:space-between; align-items:flex-start;">
@@ -746,7 +759,7 @@
 
                       <!-- Distributed -->
                       <div x-show="col.key === 'distributed'">
-                        <img src="/static/nsx-vpc-distributed.jpg?v=4"
+                        <img src="/static/nsx-vpc-distributed.jpg?v=5"
                              alt="NSX-VPC Distributed Architecture"
                              title="Click to enlarge"
                              @click="diagImg='/static/nsx-vpc-distributed.jpg?v=4'; showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
@@ -763,7 +776,7 @@
 
                       <!-- Centralized -->
                       <div x-show="col.key === 'centralized'">
-                        <img src="/static/nsx-vpc-centralized.jpg?v=1"
+                        <img src="/static/nsx-vpc-centralized.jpg?v=2"
                              alt="NSX-VPC Centralized Architecture"
                              title="Click to enlarge"
                              @click="diagImg='/static/nsx-vpc-centralized.jpg?v=1'; showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
@@ -778,7 +791,7 @@
 
                       <!-- VDS / FLB -->
                       <div x-show="col.key === 'vds_flb'">
-                        <img src="/static/vds.jpg?v=1"
+                        <img src="/static/vds.jpg?v=3"
                              alt="VDS Architecture"
                              title="Click to enlarge"
                              @click="diagImg='/static/vds.jpg?v=1'; showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
@@ -815,7 +828,11 @@
                 { key: 'centralized', label: 'NSX-VPC Centralized', badge: 'Advanced',                  icon: 'fa-circle-nodes'  },
                 { key: 'vds_flb',     label: 'VDS',                  badge: 'No NSX',                    icon: 'fa-ethernet'      }
               ]" :key="col.key">
-                <div class="card" style="display:flex; flex-direction:column;">
+                <div class="card"
+                     :style="'display:flex; flex-direction:column;'
+                             + (activeColKey() && activeColKey() !== col.key
+                                ? 'opacity:0.38; filter:grayscale(60%); pointer-events:none;'
+                                : '')">
 
                   <!-- Column header: title row + badge row -->
                   <div class="card-header" style="justify-content:space-between; align-items:flex-start;">
@@ -844,7 +861,7 @@
                   <div class="pros-cons-section">
                     <!-- Distributed -->
                     <div x-show="col.key === 'distributed'">
-                      <img src="/static/nsx-vpc-distributed.jpg?v=4"
+                      <img src="/static/nsx-vpc-distributed.jpg?v=5"
                            alt="NSX-VPC Distributed Architecture"
                            title="Click to enlarge"
                            @click="diagImg='/static/nsx-vpc-distributed.jpg?v=4'; showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
@@ -860,7 +877,7 @@
                     </div>
                     <!-- Centralized -->
                     <div x-show="col.key === 'centralized'">
-                      <img src="/static/nsx-vpc-centralized.jpg?v=1"
+                      <img src="/static/nsx-vpc-centralized.jpg?v=2"
                            alt="NSX-VPC Centralized Architecture"
                            title="Click to enlarge"
                            @click="diagImg='/static/nsx-vpc-centralized.jpg?v=1'; showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
@@ -874,7 +891,7 @@
                     </div>
                     <!-- VDS / FLB -->
                     <div x-show="col.key === 'vds_flb'">
-                      <img src="/static/vds.jpg?v=1"
+                      <img src="/static/vds.jpg?v=3"
                            alt="VDS Architecture"
                            title="Click to enlarge"
                            @click="diagImg='/static/vds.jpg?v=1'; showDiagram = true; diagDrag.x = null; diagDrag.y = null;"
@@ -2953,7 +2970,7 @@
        style="position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:9000;
               display:flex; align-items:center; justify-content:center; padding:1rem;">
     <div style="background:#fff; border-radius:6px; box-shadow:0 8px 40px rgba(0,0,0,0.25);
-                width:100%; max-width:1000px; max-height:90vh; overflow-y:auto;">
+                width:96vw; max-width:1700px; max-height:92vh; overflow-y:auto; display:flex; flex-direction:column;">
 
       <!-- Header -->
       <div style="display:flex; align-items:center; justify-content:space-between;
@@ -2967,8 +2984,11 @@
         <button @click="vks.ct.show = false" style="background:none; border:none; cursor:pointer; font-size:1.1rem; color:#6e777b;">✕</button>
       </div>
 
-      <!-- Body -->
-      <div style="padding:1rem;">
+      <!-- Body: two-column — left=test results, right=topology -->
+      <div style="display:flex; flex:1; min-height:0; overflow:hidden;">
+
+        <!-- LEFT column: connectivity test -->
+        <div style="flex:1; min-width:0; padding:1rem; overflow-y:auto; border-right:1px solid #dfe3e6;">
 
         <!-- Loading spinner -->
         <template x-if="vks.ct.loading">
@@ -3074,7 +3094,33 @@
           </div>
         </template>
 
-      </div><!-- /body -->
+      </div><!-- /body-left -->
+
+        <!-- RIGHT column: topology diagram -->
+        <div style="width:520px; flex-shrink:0; padding:0.75rem; overflow-y:auto; background:#f8fafc;">
+          <div style="font-size:0.72rem; font-weight:600; color:#546e7a; margin-bottom:0.5rem; text-transform:uppercase; letter-spacing:0.05em;">
+            Network Topology
+          </div>
+          <!-- Loading placeholder -->
+          <template x-if="!vks.ct.topoSvg && vks.ct.loading">
+            <div style="display:flex; align-items:center; gap:0.5rem; color:#90a4ae; padding:1rem 0;">
+              <i class="fas fa-circle-notch fa-spin"></i>
+              <span style="font-size:0.8rem;">Loading topology…</span>
+            </div>
+          </template>
+          <!-- SVG diagram -->
+          <template x-if="vks.ct.topoSvg">
+            <div x-html="vks.ct.topoSvg" style="width:100%; overflow-x:auto;"></div>
+          </template>
+          <!-- Fallback: not yet loaded -->
+          <template x-if="!vks.ct.topoSvg && !vks.ct.loading">
+            <div style="color:#90a4ae; font-size:0.8rem; padding:1rem 0;">
+              Topology will appear here.<br>Open the Topology modal first to cache NSX data.
+            </div>
+          </template>
+        </div><!-- /body-right -->
+
+      </div><!-- /body-row -->
     </div><!-- /modal-box -->
   </div><!-- /overlay -->
 
@@ -3620,7 +3666,10 @@
       vks: { loading: false, done: false, clusters: [], namespaces: [], supervisor_vip: '', error: null,
              username: '', password: '', showPwd: false, clusterStatus: {},
              ct: { loading: false, done: false, error: null, groups: [], server_ip: '',
-                   supervisor_vip: '', cluster: '', show: false } },
+                   supervisor_vip: '', cluster: '', show: false, topoSvg: '' } },
+
+      topo: { show: false, loading: false, error: null, svg: '', cluster: '' },
+      topoNsx: null,   // cached raw NSX topology response for reuse in other panels
 
       showDiagram: false, // lightbox for architecture diagram
       diagImg: '/static/nsx-vpc-distributed.jpg?v=4',
@@ -3844,6 +3893,7 @@
         this.vks.ct.done    = false;
         this.vks.ct.error   = null;
         this.vks.ct.groups  = [];
+        this.vks.ct.topoSvg = '';
         this.vks.ct.cluster = cluster ? cluster.name : '';
         this.vks.ct.show    = true;   // open modal immediately (shows spinner)
         try {
@@ -3880,6 +3930,381 @@
           this.vks.ct.loading = false;
           this.vks.ct.done    = true;
         }
+        // ── Load topology for the right panel ─────────────────────────
+        this._loadConnTestTopo(cluster);
+      },
+
+      async _loadConnTestTopo(cluster) {
+        if (this.topoNsx) {
+          // Already cached — compute SVG immediately
+          this.vks.ct.topoSvg = this._buildTopologySvg(
+            this.topoNsx, cluster, { serverIp: this.vks.ct.server_ip });
+          return;
+        }
+        // Fetch fresh
+        try {
+          const payload = {
+            vc_url: this.form.vc_url, vc_user: this.form.username, vc_pass: this.form.password,
+            nsx_url: this.form.nsx_url, nsx_user: this.form.nsx_user, nsx_pass: this.form.nsx_pass,
+          };
+          const r = await fetch('/api/topology', { method:'POST',
+            headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload) });
+          const d = await r.json();
+          if (d.success) {
+            this.topoNsx = d;
+            this.vks.ct.topoSvg = this._buildTopologySvg(d, cluster, { serverIp: this.vks.ct.server_ip });
+          }
+        } catch(e) { /* topology is optional — ignore errors */ }
+      },
+
+      // ── Live Topology ─────────────────────────────────────────────────
+      async openTopology(cluster) {
+        this.topo = { show: true, loading: true, error: null, svg: '', cluster: cluster?.name || '' };
+        try {
+          const payload = {
+            vc_url:   this.form.vc_url,
+            vc_user:  this.form.username,
+            vc_pass:  this.form.password,
+            nsx_url:  this.form.nsx_url,
+            nsx_user: this.form.nsx_user,
+            nsx_pass: this.form.nsx_pass,
+          };
+          const r = await fetch('/api/topology', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify(payload),
+          });
+          const d = await r.json();
+          console.log('[topology] API response:', JSON.stringify(d).substring(0, 2000));
+          if (!d.success) { this.topo.error = (d.error || 'Unknown error') + (d.tb ? '\n\n'+d.tb.substring(0,500) : ''); return; }
+          if (d._debug) console.log('[topology] debug:', JSON.stringify(d._debug));
+          this.topoNsx = d;   // cache for reuse in connectivity test panel
+          this.topo.svg = this._buildTopologySvg(d, cluster);
+        } catch(e) {
+          this.topo.error = String(e);
+        } finally {
+          this.topo.loading = false;
+        }
+      },
+
+      _buildTopologySvg(nsx, selectedCluster, opts = {}) {
+        const tgws      = nsx.tgws      || [];
+        const vpcTgwMap = nsx.vpc_tgw_map || {};
+        const dtgw      = tgws.find(t => t.type === 'D');
+        const ctgw      = tgws.find(t => t.type === 'C');
+        const supVip    = this.installResult?.clusters?.[0]?.api_server_cluster_endpoint || '';
+        const supMode   = this.installResult?.clusters?.[0]?.network_mode || '';
+        const supTgwId  = supMode.includes('Distributed') ? dtgw?.id
+                        : supMode.includes('Centralized')  ? ctgw?.id : null;
+
+        const vksList = selectedCluster
+          ? (this.vks.clusters || []).filter(c => c.name === selectedCluster.name)
+          : (this.vks.clusters || []);
+
+        // ── Helper: resolve vpc_tgw_map entry (new format: {tgw_id, name}) ──
+        const _tgwId = entry => (entry && typeof entry === 'object') ? entry.tgw_id : entry;
+        const _vpcName = entry => (entry && typeof entry === 'object') ? entry.name : entry;
+
+        // ── Build reverse map: tgwId → [{key, name}] ─────────────────
+        const tgwToVpcs = {};
+        Object.entries(vpcTgwMap).forEach(([key, val]) => {
+          const tid  = _tgwId(val);
+          const nm   = _vpcName(val);
+          if (tid) (tgwToVpcs[tid] = tgwToVpcs[tid] || []).push({ key, name: nm });
+        });
+
+        // ── Assign VKS clusters to TGW branches ──────────────────────
+        const vksByTgw = {};   // tgwId → [cluster, ...]
+        const unassigned = [];
+        vksList.forEach(c => {
+          const key   = (c.namespace || c.name || '').toLowerCase();
+          const entry = vpcTgwMap[key] || vpcTgwMap[c.name.toLowerCase()];
+          const tgwId = _tgwId(entry);
+          const vpcNm = _vpcName(entry) || key;
+          if (tgwId) { (vksByTgw[tgwId] = vksByTgw[tgwId] || []).push({...c, _vpcName: vpcNm}); }
+          else        { unassigned.push(c); }
+        });
+        // Fallback: unassigned → D-TGW if present, else C-TGW
+        const fallbackTgw = dtgw?.id || ctgw?.id;
+        unassigned.forEach(c => {
+          if (fallbackTgw) (vksByTgw[fallbackTgw] = vksByTgw[fallbackTgw] || []).push(c);
+        });
+
+        // ── Build branch descriptors ──────────────────────────────────
+        const branches = [];
+        [dtgw, ctgw].filter(Boolean).forEach(tgw => {
+          branches.push({
+            tgw,
+            ec:          tgw.ext_conn || {},
+            isSupBranch: tgw.id === supTgwId,
+            vksBranch:   vksByTgw[tgw.id] || [],
+          });
+        });
+        // Supervisor LEFT, VKS RIGHT
+        branches.sort((a, b) => (b.isSupBranch ? 1 : 0) - (a.isSupBranch ? 1 : 0));
+
+        // ── Layout constants ──────────────────────────────────────────
+        const W       = 880, pad = 30;
+        const n       = branches.length || 1;
+        const bxArr   = branches.map((_, i) => Math.round(W * (i + 1) / (n + 1)));
+        const routerX = Math.round(W / 2);
+
+        // Y rows
+        const Yr = 70;   // Physical Router
+        const Yt = 235;  // T0 (C-branch) / VLAN connector (D-branch)
+        const Yg = 370;  // TGW
+        const Yv = 490;  // VPC
+        const Yb = 585;  // Workload box
+
+        // Max VKS clusters in any branch → height
+        const maxVks = branches.reduce((m, br) =>
+          Math.max(m, br.vksBranch.length + (br.isSupBranch ? 1 : 0)), 0);
+        const H = Yb + 70 + Math.max(0, maxVks - 2) * 30;
+
+        // ── SVG helpers ───────────────────────────────────────────────
+        const esc  = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        const circ = (x, y, r, fill, stroke, label, sub='') => {
+          const lines  = label.split('\n');
+          const dy0    = lines.length > 1 ? -8 : 0;
+          const tSpans = lines.map((l,i) =>
+            `<tspan x="${x}" dy="${i===0 ? dy0 : 16}" font-size="11" font-weight="600">${esc(l)}</tspan>`
+          ).join('');
+          return `<circle cx="${x}" cy="${y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="2"/>
+            <text x="${x}" y="${y+4}" text-anchor="middle" fill="#fff">${tSpans}</text>
+            ${sub ? `<text x="${x}" y="${y+r+14}" text-anchor="middle" font-size="9.5" fill="#555">${esc(sub)}</text>` : ''}`;
+        };
+        const box = (x, y, w, h, fill, stroke, lines=[]) => {
+          const lh     = 14;
+          const tStart = y + h/2 - ((lines.length - 1) * lh) / 2;
+          const tSpans = lines.map((l, i) =>
+            `<text x="${x+w/2}" y="${tStart+i*lh}" text-anchor="middle" font-size="10" font-weight="600" fill="${stroke}">${esc(l)}</text>`
+          ).join('');
+          return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>
+            ${tSpans}`;
+        };
+        const arrow = (x1, y1, x2, y2) => {
+          const dx=x2-x1, dy=y2-y1, len=Math.sqrt(dx*dx+dy*dy)||1;
+          const ux=dx/len, uy=dy/len;
+          const ax=x2-ux*10, ay=y2-uy*10;
+          return `<line x1="${x1}" y1="${y1}" x2="${ax}" y2="${ay}" stroke="#90a4ae" stroke-width="1.5"/>
+            <polygon points="${x2},${y2} ${ax-uy*5},${ay+ux*5} ${ax+uy*5},${ay-ux*5}" fill="#90a4ae"/>`;
+        };
+        const pill = (cx, cy, txt, fg='#546e7a', bg='#f0f4f8') => {
+          const w = txt.length * 6.8 + 14;
+          return `<rect x="${cx-w/2}" y="${cy-9}" width="${w}" height="17" rx="8" fill="${bg}" stroke="#cfd8dc" stroke-width="1"/>
+            <text x="${cx}" y="${cy+4}" text-anchor="middle" font-size="9.5" fill="${fg}">${esc(txt)}</text>`;
+        };
+        const edgeLbl = (cx, cy, vlans) => {
+          // vlans = [{vlan, gateway_ip}, ...] — one line per unique VLAN
+          if (!vlans || !vlans.length) return '';
+          const lines = vlans.map(({vlan, gateway_ip}) => {
+            const parts = [];
+            if (vlan)       parts.push(`VLAN ${vlan}`);
+            if (gateway_ip) parts.push(gateway_ip);   // no "Router:" prefix — keeps label compact
+            return parts.join('  ·  ');
+          }).filter(Boolean);
+          if (!lines.length) return '';
+          const maxW = Math.max(...lines.map(l => l.length)) * 6.4 + 16;
+          const h    = lines.length * 15 + 8;
+          const yt   = cy - h / 2;
+          const tSpans = lines.map((l, i) =>
+            `<text x="${cx}" y="${yt + 13 + i*15}" text-anchor="middle" font-size="9.5" fill="#37474f">${esc(l)}</text>`
+          ).join('');
+          return `<rect x="${cx-maxW/2}" y="${yt}" width="${maxW}" height="${h}" rx="5"
+                        fill="#fff9c4" stroke="#f9a825" stroke-width="1"/>
+            ${tSpans}`;
+        };
+        const cloudShape = (cx, cy, label1, label2, fill) => {
+          // Proper cloud: 3 bumps on top, rounded sides, rounded bottom
+          // ~96px wide, ~58px tall, centered at (cx, cy-8) visually
+          const d = [
+            `M ${cx-44} ${cy+16}`,
+            `Q ${cx-54} ${cy+16} ${cx-54} ${cy+4}`,
+            `Q ${cx-54} ${cy-12} ${cx-36} ${cy-14}`,
+            `Q ${cx-34} ${cy-34} ${cx-12} ${cy-32}`,
+            `Q ${cx-6}  ${cy-50} ${cx+14} ${cy-44}`,
+            `Q ${cx+22} ${cy-58} ${cx+38} ${cy-46}`,
+            `Q ${cx+56} ${cy-42} ${cx+54} ${cy-22}`,
+            `Q ${cx+60} ${cy-8}  ${cx+44} ${cy+4}`,
+            `Q ${cx+54} ${cy+16} ${cx+44} ${cy+16}`,
+            `Q ${cx+24} ${cy+28} ${cx}    ${cy+22}`,
+            `Q ${cx-24} ${cy+28} ${cx-44} ${cy+16}`,
+            'Z',
+          ].join(' ');
+          const textY1 = cy - 10, textY2 = cy + 4;
+          return [
+            `<path d="${d}" fill="${fill}"/>`,
+            `<text x="${cx}" y="${textY1}" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">${esc(label1)}</text>`,
+            label2 ? `<text x="${cx}" y="${textY2}" text-anchor="middle" fill="#fff" font-size="11" font-weight="700">${esc(label2)}</text>` : '',
+          ].join('');
+        };
+        const laptopNode = (cx, cy, serverIp) => {
+          // Simple laptop shape for "This server"
+          return [
+            // Screen
+            `<rect x="${cx-20}" y="${cy-24}" width="40" height="27" rx="3" fill="#fff" stroke="#607d8b" stroke-width="1.5"/>`,
+            `<rect x="${cx-16}" y="${cy-20}" width="32" height="19" rx="1" fill="#cfd8dc"/>`,
+            // Keyboard base
+            `<rect x="${cx-24}" y="${cy+3}" width="48" height="8" rx="3" fill="#90a4ae" stroke="#607d8b" stroke-width="1.5"/>`,
+            // Hinge line
+            `<line x1="${cx-20}" y1="${cy+3}" x2="${cx+20}" y2="${cy+3}" stroke="#607d8b" stroke-width="0.8"/>`,
+            // Labels
+            `<text x="${cx}" y="${cy+22}" text-anchor="middle" font-size="9" font-weight="600" fill="#37474f">This server</text>`,
+            serverIp ? `<text x="${cx}" y="${cy+33}" text-anchor="middle" font-size="8.5" fill="#78909c">${esc('(' + serverIp + ')')}</text>` : '',
+          ].join('');
+        };
+
+        // ── Start SVG ─────────────────────────────────────────────────
+        const serverIp = opts.serverIp || '';
+        const svgW = serverIp ? W + 120 : W;
+        let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgW}" height="${H}"
+                       viewBox="0 0 ${svgW} ${H}" style="max-width:100%;"
+                       font-family="Metropholic,Arial,sans-serif">
+          <defs>
+            <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+              <path d="M0,0 L0,6 L8,3 z" fill="#90a4ae"/>
+            </marker>
+          </defs>
+          <rect width="${svgW}" height="${H}" fill="#f8fafc" rx="8"/>`;
+
+        // ── Physical Fabric (top-center) — grey cloud ────────────────
+        svg += cloudShape(routerX, Yr, 'Physical', 'Fabric', '#78909c');
+
+        // ── Laptop "This server" node (top-right) ────────────────────
+        if (serverIp) {
+          const lx = W + 80;  // right of main diagram
+          svg += laptopNode(lx, Yr, serverIp);
+          // Dashed line from cloud right edge → laptop
+          const cloudRight = routerX + 54;
+          const laptopLeft = lx - 24;
+          svg += `<line x1="${cloudRight}" y1="${Yr}" x2="${laptopLeft}" y2="${Yr}"
+                        stroke="#90a4ae" stroke-width="1.5" stroke-dasharray="5,4"/>
+            <polygon points="${laptopLeft},${Yr} ${laptopLeft-8},${Yr-4} ${laptopLeft-8},${Yr+4}" fill="#90a4ae"/>`;
+        }
+
+        // ── Debug: show data when branches is empty ───────────────────
+        if (branches.length === 0) {
+          const dbg = nsx._debug || {};
+          const lines = [
+            `tgws: ${tgws.length} | dtgw: ${dtgw ? dtgw.type+'/'+dtgw.id : 'null'} | ctgw: ${ctgw ? ctgw.type+'/'+ctgw.id : 'null'}`,
+            `global TGW: ${dbg.global_tgw_status||'?'} (${dbg.global_tgw_count??'?'} found)`,
+            `projects: ${dbg.projects_status||'?'} — ids: ${(dbg.projects_found||[]).join(', ')||'none'}`,
+            `tgw_ids: ${(dbg.tgw_ids||[]).join(', ')||'none'}`,
+          ];
+          lines.forEach((line, i) => {
+            svg += `<text x="${routerX}" y="${Yr+70+i*16}" text-anchor="middle" font-size="10" fill="#b71c1c">${esc(line)}</text>`;
+          });
+        }
+
+        // ── Per-branch rendering ──────────────────────────────────────
+        branches.forEach((br, i) => {
+          const bx      = bxArr[i];
+          const { tgw, ec, isSupBranch, vksBranch } = br;
+          const isDist  = tgw.type === 'D';
+          // Color by role: Supervisor=blue, VKS=purple (regardless of D/C)
+          const branchFill  = isSupBranch ? '#0072a3' : '#6a1b9a';
+          const branchDark  = isSupBranch ? '#004e73' : '#4a148c';
+          const tgwLbl      = isDist ? 'D-TGW'  : 'C-TGW';
+
+          // VLAN+Gateway label — bias toward the branch (72%) so multi-line labels don't overlap
+          const midY = isDist ? Math.round((Yr + Yg) / 2) : Math.round((Yr + Yt) / 2);
+          const midX = Math.round(routerX * 0.28 + bx * 0.72);
+
+          // Arrow from router cloud bottom → (T0 top for C, TGW top for D)
+          const topNodeY = isDist ? Yg - 34 : Yt - 30;
+          svg += arrow(routerX, Yr + 22, bx, topNodeY);
+
+          // VLAN/GW label — use vlans array if present, else build from scalar fields
+          const ecVlans = ec.vlans && ec.vlans.length
+            ? ec.vlans
+            : (ec.vlan || ec.gateway_ip ? [{vlan: ec.vlan||'', gateway_ip: ec.gateway_ip||''}] : []);
+          if (ecVlans.length) {
+            svg += edgeLbl(midX, midY, ecVlans);
+          }
+
+          // ── T0 node (Centralized only) — use branch color ──────────
+          if (!isDist && ec.type === 't0') {
+            svg += circ(bx, Yt, 30, branchFill, branchDark,
+              (ec.name || 'T0').substring(0, 10), 'T0');
+            svg += arrow(bx, Yt + 30, bx, Yg - 34);
+          }
+
+          // ── TGW node — use branch color ───────────────────────────
+          const shortName = (tgw.name || '').length > 20
+            ? tgw.name.substring(0, 18) + '…' : (tgw.name || '');
+          svg += circ(bx, Yg, 32, branchFill, branchDark, tgwLbl, shortName);
+
+          // ── VPC branches below TGW ────────────────────────────────
+          const vpcs = [];
+          if (isSupBranch && supVip) {
+            // Supervisor VPC name: find VPC in this TGW that's NOT a VKS namespace
+            const vksKeys = new Set(vksList.map(c => (c.namespace||c.name||'').toLowerCase()));
+            const supVpcEntry = (tgwToVpcs[tgw.id] || []).find(v => !vksKeys.has(v.key));
+            vpcs.push({ kind: 'sup', vip: supVip, vpcName: supVpcEntry?.name || '' });
+          }
+          vksBranch.forEach(c => {
+            vpcs.push({ kind: 'vks', vip: c.control_plane_vip || '', cluster: c });
+          });
+          if (!vpcs.length) {
+            // Empty branch — just show the TGW
+            return;
+          }
+
+          const spacing  = Math.min(140, (W * 0.4) / vpcs.length);
+          const vpcStart = bx - (vpcs.length - 1) * spacing / 2;
+
+          vpcs.forEach((v, vi) => {
+            const vx = Math.round(vpcStart + vi * spacing);
+            svg += arrow(bx, Yg + 32, vx, Yv - 30);
+
+            if (v.kind === 'sup') {
+              // Supervisor VPC — branch blue; no subtitle inside circle
+              const vpcLight = '#cce5f5';
+              svg += circ(vx, Yv, 30, branchFill, branchDark, 'Supervisor\nVPC');
+              // VPC name below circle
+              if (v.vpcName) {
+                svg += `<text x="${vx}" y="${Yv+46}" text-anchor="middle"
+                  font-size="9" fill="${branchDark}" font-style="italic">${esc(v.vpcName)}</text>`;
+              }
+              // VIP to the right of circle
+              if (v.vip) {
+                svg += `<text x="${vx+36}" y="${Yv+4}" text-anchor="start"
+                  font-size="9.5" fill="${branchDark}">VIP: ${esc(v.vip)}</text>`;
+              }
+              svg += arrow(vx, Yv + 30, vx, Yb);
+              svg += box(vx - 62, Yb, 124, 46, vpcLight, branchDark, ['Supervisor VM ×3']);
+            } else {
+              // VKS VPC — branch purple
+              const c       = v.cluster || v;
+              const nm      = (c.name || '').length > 18 ? c.name.substring(0,16)+'…' : c.name;
+              const w       = (c.worker_replicas ?? '?');
+              const vpcNm   = c._vpcName || '';
+              const vpcLight = '#f3e5f5';
+              svg += circ(vx, Yv, 30, branchFill, branchDark, 'VKS\nVPC');
+              // VPC name below circle
+              if (vpcNm) {
+                svg += `<text x="${vx}" y="${Yv+46}" text-anchor="middle"
+                  font-size="9" fill="${branchDark}" font-style="italic">${esc(vpcNm)}</text>`;
+              }
+              // VIP to the right of circle
+              if (v.vip) {
+                svg += `<text x="${vx+36}" y="${Yv+4}" text-anchor="start"
+                  font-size="9.5" fill="${branchDark}">VIP: ${esc(v.vip)}</text>`;
+              }
+              svg += arrow(vx, Yv + 30, vx, Yb);
+              svg += box(vx - 68, Yb, 136, 46, vpcLight, branchDark, [nm, `${w} worker(s)`]);
+              if (c.namespace) {
+                svg += `<text x="${vx}" y="${Yb+60}" text-anchor="middle"
+                  font-size="9" fill="${branchDark}" font-style="italic">${esc(c.namespace)}</text>`;
+              }
+            }
+          });
+        });
+
+        // Legend removed per user request
+
+        svg += '</svg>';
+        return svg;
       },
 
       // ── Wizard methods ────────────────────────────────────────────────
@@ -4979,6 +5404,59 @@
            style="max-width:56vw; max-height:84vh; border-radius:0 0 6px 6px;
                   box-shadow:0 12px 48px rgba(0,0,0,0.55); display:block;
                   border:2px solid rgba(255,255,255,0.15); border-top:none;">
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════
+       Live Topology Modal
+  ════════════════════════════════════════════════════════════════ -->
+  <div x-show="topo.show" x-cloak
+       style="position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:9100;
+              display:flex; align-items:center; justify-content:center; padding:1rem;">
+    <div style="background:#fff; border-radius:8px; box-shadow:0 8px 48px rgba(0,0,0,0.3);
+                width:100%; max-width:900px; max-height:92vh; overflow-y:auto;">
+
+      <!-- Header -->
+      <div style="display:flex; align-items:center; justify-content:space-between;
+                  padding:0.75rem 1rem; border-bottom:1px solid #dfe3e6; position:sticky; top:0; background:#fff; z-index:1;">
+        <span style="font-size:0.9rem; font-weight:700; color:#1565c0;">
+          <i class="fas fa-diagram-project" style="margin-right:0.5rem;"></i>
+          Topology
+          <span x-show="topo.cluster" style="font-weight:400; font-size:0.78rem; color:#6e777b; margin-left:0.4rem;"
+                x-text="'— ' + topo.cluster"></span>
+        </span>
+        <button @click="topo.show=false" style="background:none;border:none;cursor:pointer;font-size:1.1rem;color:#6e777b;">✕</button>
+      </div>
+
+      <!-- Body -->
+      <div style="padding:1rem;">
+
+        <!-- Loading -->
+        <template x-if="topo.loading">
+          <div style="display:flex;align-items:center;gap:0.6rem;padding:2rem;justify-content:center;color:#1565c0;">
+            <i class="fas fa-circle-notch fa-spin" style="font-size:1.4rem;"></i>
+            <span style="font-size:0.85rem;">Fetching topology from NSX…</span>
+          </div>
+        </template>
+
+        <!-- Error -->
+        <template x-if="!topo.loading && topo.error">
+          <div class="alert alert-danger alert-sm">
+            <div class="alert-items"><div class="alert-item static">
+              <i class="fas fa-triangle-exclamation" style="margin-right:0.3rem;"></i>
+              <span x-text="topo.error"></span>
+            </div></div>
+          </div>
+        </template>
+
+        <!-- Diagram -->
+        <template x-if="!topo.loading && !topo.error && topo.svg">
+          <div style="overflow-x:auto; text-align:center;">
+            <div x-html="topo.svg"></div>
+          </div>
+        </template>
+
+      </div>
     </div>
   </div>
 
