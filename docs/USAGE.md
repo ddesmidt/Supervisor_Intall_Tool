@@ -248,7 +248,7 @@ A summary line shows the Supervisor VIP and the total number of clusters and nam
 | Control Plane VIP | The VKS cluster's own Kubernetes API endpoint |
 | K8s Version | Kubernetes version of the VKS cluster |
 | Workers | Total worker node replica count |
-| Connectivity | Per-cluster **"Test"** button — opens the Connectivity Test modal |
+| Connectivity | Per-cluster **"Test"** button — opens the Connectivity Test modal. The button is colour-coded: **grey** = not yet tested · 🔵 blue (spinning) = test in progress · 🟢 green = all tests passed · 🔴 red = at least one test failed. The colour persists until the next test run. |
 
 ---
 
