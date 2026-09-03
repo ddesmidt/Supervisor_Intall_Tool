@@ -222,6 +222,83 @@ After clicking **"Deploy"**, the wizard switches to a status view that polls eve
 
 ---
 
+## Step 6 — VKS Clusters (Tanzu Kubernetes)
+
+Once the Supervisor is **RUNNING**, a **VKS Clusters** section appears below the install status banner. It lists all Tanzu Kubernetes (VKS/TKG) clusters deployed under the Supervisor.
+
+### Credentials
+
+The Supervisor's Kubernetes API uses its own SSO domain (e.g. `administrator@wld.sso`), which may differ from the vCenter credentials. Enter the Supervisor username and password in the fields shown — they default to the vCenter credentials and can be changed if needed. A show/hide eye icon is available on the password field.
+
+### Listing Clusters
+
+Click **"List VKS Clusters"** to query the Supervisor. The tool:
+1. Authenticates to vCenter to find the **Supervisor Control Plane VIP**
+2. Logs into the Supervisor at `https://{vip}/wcp/login`
+3. Queries the CAPI Kubernetes API (`/apis/cluster.x-k8s.io/v1beta1/clusters`) for all VKS clusters
+
+A summary line shows the Supervisor VIP and the total number of clusters and namespaces found.
+
+### Cluster Table
+
+| Column | Description |
+|---|---|
+| Cluster Name | CAPI cluster name and namespace |
+| Phase | Kubernetes cluster lifecycle phase (e.g. Provisioned, Deleting) |
+| Control Plane VIP | The VKS cluster's own Kubernetes API endpoint |
+| K8s Version | Kubernetes version of the VKS cluster |
+| Workers | Total worker node replica count |
+| Connectivity | Per-cluster **"Test"** button — opens the Connectivity Test modal |
+
+---
+
+## Step 7 — Connectivity Test
+
+Clicking **"Test"** on a VKS cluster row opens the **Connectivity Test** modal, which runs three groups of tests to verify network reachability between the Supervisor and the VKS cluster.
+
+> Tests may take 20–30 seconds because the exec-based probes must find a suitable pod, open a WebSocket exec session, and run the TCP tool inside the container.
+
+### Group 1 — TCP from App Server
+
+Direct socket probe from **this server** (the VM running the app) to:
+- Supervisor Control Plane VIP:6443
+- VKS Cluster Control Plane VIP:6443
+
+This confirms basic layer-3/4 reachability from the tool's own network position and does **not** require any Kubernetes exec permissions.
+
+### Group 2 — Supervisor Node → VKS Control Plane VIP
+
+TCP probe **exec'd inside a pod running on a Supervisor node**:
+1. The tool searches all Supervisor namespaces for a Running pod with a network tool (`python3`, `nc`, `curl`, `wget`, or `bash`), preferring `hostNetwork=true` pods (antrea-agent, vsphere-csi-node …) so the source IP matches the actual node IP
+2. It opens a raw WebSocket exec session (no `kubectl` required) and runs a TCP probe to the VKS control plane VIP:6443
+3. The result shows which pod and node were used, and which tool ran the probe
+
+> `kube-proxy` pods are explicitly avoided — their iptables DNAT rules can redirect outbound connections and produce false results.
+
+### Group 3 — VKS Node → Supervisor Control Plane VIP
+
+TCP probe **exec'd inside a pod running on a VKS worker node**:
+1. The tool fetches the VKS cluster's kubeconfig from the `{cluster}-kubeconfig` secret in the Supervisor
+2. It authenticates to the VKS cluster API using the extracted client certificate
+3. It finds a suitable exec-capable pod in the VKS cluster and probes TCP to the Supervisor VIP:6443
+
+This confirms that VKS worker nodes can reach the Supervisor API — necessary for the nodes to rejoin after a reboot.
+
+### Result Table
+
+Each row shows:
+
+| Column | Description |
+|---|---|
+| Source | Pod name, namespace, node name, and whether hostNetwork is used |
+| Destination | Target IP and port |
+| Method | `tcp` (direct socket) or `exec` (probe inside pod) |
+| Probe | Tool used (`python3`, `nc`, `curl`, `wget`) |
+| Result | ✅ OK or ❌ FAIL |
+| Detail | Output or error message |
+
+---
+
 ## Tips
 
 - **Hard refresh** (`Cmd+Shift+R` on Mac, `Ctrl+Shift+R` on Windows) if the UI looks stale after a change — Flask serves templates from disk but browsers cache aggressively.
