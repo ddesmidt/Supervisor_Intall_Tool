@@ -3019,16 +3019,18 @@
 
                 <table style="width:100%; border-collapse:collapse; font-size:0.75rem; table-layout:fixed;">
                   <colgroup>
-                    <col style="width:48px;">   <!-- ✓/✗ icon -->
-                    <col style="width:34%;">    <!-- Source -->
-                    <col style="width:34%;">    <!-- Destination -->
-                    <col>                       <!-- Result — takes remaining space -->
+                    <col style="width:44px;">   <!-- ✓/✗ icon -->
+                    <col style="width:28%;">    <!-- Source -->
+                    <col style="width:26%;">    <!-- Destination -->
+                    <col style="width:28%;">    <!-- Traffic in Physical Fabric -->
+                    <col>                       <!-- Result -->
                   </colgroup>
                   <thead>
                     <tr style="background:#f3f6fa; border-bottom:1px solid #dfe3e6;">
-                      <th style="padding:0.28rem 0.5rem; text-align:center;">Result</th>
+                      <th style="padding:0.28rem 0.5rem;"></th>
                       <th style="padding:0.28rem 0.5rem; text-align:left; font-weight:600; color:#4a5568;">Source</th>
                       <th style="padding:0.28rem 0.5rem; text-align:left; font-weight:600; color:#4a5568;">Destination</th>
+                      <th style="padding:0.28rem 0.5rem; text-align:left; font-weight:600; color:#4a5568;">Traffic in Physical Fabric</th>
                       <th style="padding:0.28rem 0.5rem; text-align:left; font-weight:600; color:#4a5568;">Result</th>
                     </tr>
                   </thead>
@@ -3058,6 +3060,8 @@
                           </template>
                         </td>
                         <td style="padding:0.3rem 0.5rem; font-family:monospace; font-size:0.71rem;" x-text="row.destination"></td>
+                        <td style="padding:0.3rem 0.5rem; font-family:monospace; font-size:0.70rem; color:#37474f;"
+                            x-text="row.physical_traffic || ''"></td>
                         <td style="padding:0.3rem 0.5rem;">
                           <!-- TCP -->
                           <template x-if="row.method === 'tcp'">
@@ -3897,6 +3901,40 @@
         this.vks.ct.cluster = cluster ? cluster.name : '';
         this.vks.ct.show    = true;   // open modal immediately (shows spinner)
         try {
+          // ── Ensure topology is loaded BEFORE computing NAT IPs ───────
+          if (!this.topoNsx) {
+            try {
+              const _tr = await fetch('/api/topology', {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({
+                  vc_url: this.form.vc_url, vc_user: this.form.username, vc_pass: this.form.password,
+                  nsx_url: this.form.nsx_url, nsx_user: this.form.nsx_user, nsx_pass: this.form.nsx_pass,
+                })
+              });
+              const _td = await _tr.json();
+              if (_td.success) this.topoNsx = _td;
+            } catch(e) { /* topology optional */ }
+          }
+
+          // Pass NAT IPs from topology so backend can show physical traffic
+          const _tgws = this.topoNsx?.tgws || [];
+          const _s20 = (a, b) => {
+            try {
+              const ip2n = s => s.split('.').reduce((acc,o)=>(acc<<8)|+o,0)>>>0;
+              return (ip2n(a)>>>12) === (ip2n(b)>>>12);
+            } catch { return false; }
+          };
+          // Resolve VKS NAT: stamped _natIp wins; then /20 match; then first D-TGW
+          const _vksNat = (() => {
+            if (cluster && cluster._natIp) return cluster._natIp;
+            const vip = cluster?.control_plane_vip || '';
+            if (vip && _tgws.length) {
+              const supCkey = (_tgws.find(t => t.type === 'C') || {}).ckey;
+              const matched = _tgws.find(t => t.ckey !== supCkey && t.nat_ip && _s20(vip, t.nat_ip));
+              if (matched) return matched.nat_ip;
+            }
+            return (_tgws.find(t => t.type === 'D') || {}).nat_ip || '';
+          })();
           const payload = {
             ...this.form,
             sup_username: this.vks.username || this.form.username,
@@ -3904,6 +3942,8 @@
             cluster_name:      cluster ? cluster.name      : '',
             cluster_namespace: cluster ? cluster.namespace : '',
             cluster_vip:       cluster ? (cluster.control_plane_vip || '') : '',
+            sup_vpc_nat: (_tgws.find(t => t.type === 'C') || {}).nat_ip || '',
+            vks_vpc_nat: _vksNat,
           };
           const r = await fetch('/api/connectivity-test', {
             method: 'POST',
@@ -3988,59 +4028,95 @@
       },
 
       _buildTopologySvg(nsx, selectedCluster, opts = {}) {
-        const tgws      = nsx.tgws      || [];
-        const vpcTgwMap = nsx.vpc_tgw_map || {};
-        const dtgw      = tgws.find(t => t.type === 'D');
-        const ctgw      = tgws.find(t => t.type === 'C');
-        const supVip    = this.installResult?.clusters?.[0]?.api_server_cluster_endpoint || '';
-        const supMode   = this.installResult?.clusters?.[0]?.network_mode || '';
-        const supTgwId  = supMode.includes('Distributed') ? dtgw?.id
-                        : supMode.includes('Centralized')  ? ctgw?.id : null;
+        const tgws         = nsx.tgws             || [];
+        const vpcTgwMap    = nsx.vpc_tgw_map      || {};
+        const vipTgwMap    = nsx.vip_to_tgw_ckey  || {};  // VIP IP → tgw ckey
+        const supVip       = this.installResult?.clusters?.[0]?.api_server_cluster_endpoint || '';
+        const supMode      = this.installResult?.clusters?.[0]?.network_mode || '';
+
+        // Supervisor's TGW: prefer the 'default' project's TGW that matches the deploy mode
+        const supCtgw = (supMode.includes('Distributed'))
+          ? tgws.find(t => t.proj_id === 'default' && t.type === 'D')
+              || tgws.find(t => t.type === 'D')
+          : tgws.find(t => t.proj_id === 'default' && t.type === 'C')
+              || tgws.find(t => t.type === 'C');
+        const supCtgwCkey = supCtgw?.ckey || '';
 
         const vksList = selectedCluster
           ? (this.vks.clusters || []).filter(c => c.name === selectedCluster.name)
           : (this.vks.clusters || []);
 
-        // ── Helper: resolve vpc_tgw_map entry (new format: {tgw_id, name}) ──
-        const _tgwId = entry => (entry && typeof entry === 'object') ? entry.tgw_id : entry;
-        const _vpcName = entry => (entry && typeof entry === 'object') ? entry.name : entry;
+        // ── Helper: resolve vpc_tgw_map entry ─────────────────────────
+        const _tgwId   = entry => (entry && typeof entry === 'object') ? entry.tgw_id : entry;
+        const _vpcName = entry => (entry && typeof entry === 'object') ? entry.name   : entry;
 
-        // ── Build reverse map: tgwId → [{key, name}] ─────────────────
+        // ── Build reverse map tgwId → [{key, name}] (for Sup VPC name display) ──
         const tgwToVpcs = {};
         Object.entries(vpcTgwMap).forEach(([key, val]) => {
-          const tid  = _tgwId(val);
-          const nm   = _vpcName(val);
+          const tid = _tgwId(val);
+          const nm  = _vpcName(val);
           if (tid) (tgwToVpcs[tid] = tgwToVpcs[tid] || []).push({ key, name: nm });
         });
 
+        // ── Helper: same /20 subnet? ──────────────────────────────────
+        // VKS VIP and the VPC's NAT IP always come from the same external IP block.
+        // Matching by /20 reliably maps a VKS cluster to its TGW without LB API.
+        const sameSubnet20 = (a, b) => {
+          if (!a || !b) return false;
+          const p = a.split('.').map(Number), q = b.split('.').map(Number);
+          return p.length === 4 && q.length === 4 &&
+                 p[0]===q[0] && p[1]===q[1] && (p[2]>>4)===(q[2]>>4);
+        };
+
         // ── Assign VKS clusters to TGW branches ──────────────────────
-        const vksByTgw = {};   // tgwId → [cluster, ...]
-        const unassigned = [];
+        const vksByTgwCkey = {};   // tgw.ckey → [cluster, ...]
+        const unassigned   = [];
         vksList.forEach(c => {
-          const key   = (c.namespace || c.name || '').toLowerCase();
-          const entry = vpcTgwMap[key] || vpcTgwMap[c.name.toLowerCase()];
-          const tgwId = _tgwId(entry);
-          const vpcNm = _vpcName(entry) || key;
-          if (tgwId) { (vksByTgw[tgwId] = vksByTgw[tgwId] || []).push({...c, _vpcName: vpcNm}); }
-          else        { unassigned.push(c); }
+          const vip = c.control_plane_vip || '';
+          // 1. Exact LB VIP match (future-proof if endpoint ever works)
+          let ckey = vipTgwMap[vip] || '';
+          // 2. /20 subnet match: VKS VIP vs each non-Supervisor TGW's nat_ip
+          if (!ckey) {
+            const matched = tgws.find(t =>
+              t.ckey !== supCtgwCkey && t.nat_ip && sameSubnet20(vip, t.nat_ip));
+            ckey = matched?.ckey || '';
+          }
+          const tgwForC = ckey ? tgws.find(t => t.ckey === ckey) : null;
+          if (tgwForC) {
+            c._natIp = tgwForC.nat_ip || '';   // write back so openConnTest can use it
+            (vksByTgwCkey[ckey] = vksByTgwCkey[ckey] || [])
+              .push({...c, _natIp: c._natIp});
+          } else {
+            unassigned.push(c);
+          }
         });
-        // Fallback: unassigned → D-TGW if present, else C-TGW
-        const fallbackTgw = dtgw?.id || ctgw?.id;
+        // Last-resort fallback (no subnet match): D-TGW → first non-sup → sup
+        const fbTgw = tgws.find(t => t.type === 'D')
+                   || tgws.find(t => t.ckey !== supCtgwCkey)
+                   || supCtgw;
         unassigned.forEach(c => {
-          if (fallbackTgw) (vksByTgw[fallbackTgw] = vksByTgw[fallbackTgw] || []).push(c);
+          if (fbTgw) (vksByTgwCkey[fbTgw.ckey] = vksByTgwCkey[fbTgw.ckey] || []).push(c);
         });
 
         // ── Build branch descriptors ──────────────────────────────────
+        // Always: Supervisor's TGW as first branch
+        // Then: each TGW that has VKS clusters (excluding Supervisor's TGW)
         const branches = [];
-        [dtgw, ctgw].filter(Boolean).forEach(tgw => {
+        if (supCtgw) {
           branches.push({
-            tgw,
-            ec:          tgw.ext_conn || {},
-            isSupBranch: tgw.id === supTgwId,
-            vksBranch:   vksByTgw[tgw.id] || [],
+            tgw: supCtgw, ec: supCtgw.ext_conn || {},
+            isSupBranch: true,
+            vksBranch: vksByTgwCkey[supCtgwCkey] || [],
           });
+        }
+        tgws.forEach(tgw => {
+          if (!tgw.ckey || tgw.ckey === supCtgwCkey) return;
+          const vksBranch = vksByTgwCkey[tgw.ckey] || [];
+          if (vksBranch.length > 0) {
+            branches.push({ tgw, ec: tgw.ext_conn || {}, isSupBranch: false, vksBranch });
+          }
         });
-        // Supervisor LEFT, VKS RIGHT
+        // Supervisor LEFT, others RIGHT (preserve order for >2 branches)
         branches.sort((a, b) => (b.isSupBranch ? 1 : 0) - (a.isSupBranch ? 1 : 0));
 
         // ── Layout constants ──────────────────────────────────────────
@@ -4050,11 +4126,11 @@
         const routerX = Math.round(W / 2);
 
         // Y rows
-        const Yr = 70;   // Physical Router
-        const Yt = 235;  // T0 (C-branch) / VLAN connector (D-branch)
+        const Yr = 70;   // Physical Fabric cloud
+        const Yt = 235;  // T0 (C-branch)
         const Yg = 370;  // TGW
-        const Yv = 490;  // VPC
-        const Yb = 585;  // Workload box
+        const Yv = 500;  // VPC  (extra space for VIP + NAT labels)
+        const Yb = 605;  // Workload box
 
         // Max VKS clusters in any branch → height
         const maxVks = branches.reduce((m, br) =>
@@ -4196,6 +4272,20 @@
           });
         }
 
+        // ── Pre-compute shared T0s (C-TGW branches that share the same T0 name) ──
+        const _t0BranchIdxs = {};
+        branches.forEach((br, i) => {
+          if (br.tgw.type !== 'D' && br.ec && br.ec.type === 't0' && br.ec.name)
+            (_t0BranchIdxs[br.ec.name] = _t0BranchIdxs[br.ec.name] || []).push(i);
+        });
+        // For each group of 2+ branches: compute the shared T0's center x
+        const _t0SharedX = {};
+        Object.entries(_t0BranchIdxs).forEach(([t0, idxs]) => {
+          if (idxs.length >= 2)
+            _t0SharedX[t0] = Math.round(idxs.reduce((s, i) => s + bxArr[i], 0) / idxs.length);
+        });
+        const _t0Drawn = new Set();
+
         // ── Per-branch rendering ──────────────────────────────────────
         branches.forEach((br, i) => {
           const bx      = bxArr[i];
@@ -4210,23 +4300,35 @@
           const midY = isDist ? Math.round((Yr + Yg) / 2) : Math.round((Yr + Yt) / 2);
           const midX = Math.round(routerX * 0.28 + bx * 0.72);
 
-          // Arrow from router cloud bottom → (T0 top for C, TGW top for D)
-          const topNodeY = isDist ? Yg - 34 : Yt - 30;
-          svg += arrow(routerX, Yr + 22, bx, topNodeY);
-
-          // VLAN/GW label — use vlans array if present, else build from scalar fields
+          // VLAN/GW label data
           const ecVlans = ec.vlans && ec.vlans.length
             ? ec.vlans
             : (ec.vlan || ec.gateway_ip ? [{vlan: ec.vlan||'', gateway_ip: ec.gateway_ip||''}] : []);
-          if (ecVlans.length) {
-            svg += edgeLbl(midX, midY, ecVlans);
-          }
 
-          // ── T0 node (Centralized only) — use branch color ──────────
-          if (!isDist && ec.type === 't0') {
-            svg += circ(bx, Yt, 30, branchFill, branchDark,
-              (ec.name || 'T0').substring(0, 10), 'T0');
-            svg += arrow(bx, Yt + 30, bx, Yg - 34);
+          const _t0Name   = !isDist && ec.type === 't0' ? (ec.name || '') : '';
+          const _isShared = _t0Name !== '' && (_t0Name in _t0SharedX);
+
+          if (_isShared) {
+            // ── Shared T0: draw cloud→T0 + node once; always draw T0→TGW ──
+            const tx = _t0SharedX[_t0Name];
+            if (!_t0Drawn.has(_t0Name)) {
+              svg += arrow(routerX, Yr + 22, tx, Yt - 30);
+              if (ecVlans.length) svg += edgeLbl(
+                Math.round(routerX * 0.28 + tx * 0.72),
+                Math.round((Yr + Yt) / 2), ecVlans);
+              svg += circ(tx, Yt, 30, '#0072a3', '#004e73', _t0Name.substring(0, 10), 'T0');
+              _t0Drawn.add(_t0Name);
+            }
+            svg += arrow(tx, Yt + 30, bx, Yg - 34);
+          } else {
+            // ── Non-shared: original logic ──────────────────────────
+            const topNodeY = isDist ? Yg - 34 : Yt - 30;
+            svg += arrow(routerX, Yr + 22, bx, topNodeY);
+            if (ecVlans.length) svg += edgeLbl(midX, midY, ecVlans);
+            if (!isDist && ec.type === 't0') {
+              svg += circ(bx, Yt, 30, branchFill, branchDark, _t0Name.substring(0, 10), 'T0');
+              svg += arrow(bx, Yt + 30, bx, Yg - 34);
+            }
           }
 
           // ── TGW node — use branch color ───────────────────────────
@@ -4235,15 +4337,20 @@
           svg += circ(bx, Yg, 32, branchFill, branchDark, tgwLbl, shortName);
 
           // ── VPC branches below TGW ────────────────────────────────
+          // NAT IP is now set directly on the TGW object by the backend (avoids project/id collisions)
+          const branchVpcNat = tgw.nat_ip || '';
+
           const vpcs = [];
           if (isSupBranch && supVip) {
-            // Supervisor VPC name: find VPC in this TGW that's NOT a VKS namespace
+            // VPC display name: find a non-VKS VPC name from tgwToVpcs (best-effort)
             const vksKeys = new Set(vksList.map(c => (c.namespace||c.name||'').toLowerCase()));
             const supVpcEntry = (tgwToVpcs[tgw.id] || []).find(v => !vksKeys.has(v.key));
-            vpcs.push({ kind: 'sup', vip: supVip, vpcName: supVpcEntry?.name || '' });
+            vpcs.push({ kind: 'sup', vip: supVip, vpcName: supVpcEntry?.name || '', natIp: branchVpcNat });
           }
           vksBranch.forEach(c => {
-            vpcs.push({ kind: 'vks', vip: c.control_plane_vip || '', cluster: c });
+            // Use per-cluster natIp (set by vipTgwMap lookup) or fall back to branchVpcNat
+            vpcs.push({ kind: 'vks', vip: c.control_plane_vip || '', cluster: c,
+                        natIp: c._natIp || branchVpcNat });
           });
           if (!vpcs.length) {
             // Empty branch — just show the TGW
@@ -4257,40 +4364,42 @@
             const vx = Math.round(vpcStart + vi * spacing);
             svg += arrow(bx, Yg + 32, vx, Yv - 30);
 
+            // ── helper: VIP + NAT labels to the right of circle ──────
+            const _vipNatLabels = (vx, vip, natIp) => {
+              let out = '';
+              if (vip) {
+                out += `<text x="${vx+36}" y="${Yv+2}" text-anchor="start"
+                  font-size="9.5" fill="${branchDark}">VIP: ${esc(vip)}</text>`;
+              }
+              if (natIp) {
+                out += `<text x="${vx+36}" y="${Yv+16}" text-anchor="start"
+                  font-size="8.8" fill="#546e7a">NAT: ${esc(natIp)}</text>`;
+              }
+              return out;
+            };
+
             if (v.kind === 'sup') {
-              // Supervisor VPC — branch blue; no subtitle inside circle
               const vpcLight = '#cce5f5';
               svg += circ(vx, Yv, 30, branchFill, branchDark, 'Supervisor\nVPC');
-              // VPC name below circle
               if (v.vpcName) {
                 svg += `<text x="${vx}" y="${Yv+46}" text-anchor="middle"
                   font-size="9" fill="${branchDark}" font-style="italic">${esc(v.vpcName)}</text>`;
               }
-              // VIP to the right of circle
-              if (v.vip) {
-                svg += `<text x="${vx+36}" y="${Yv+4}" text-anchor="start"
-                  font-size="9.5" fill="${branchDark}">VIP: ${esc(v.vip)}</text>`;
-              }
+              svg += _vipNatLabels(vx, v.vip, v.natIp);
               svg += arrow(vx, Yv + 30, vx, Yb);
               svg += box(vx - 62, Yb, 124, 46, vpcLight, branchDark, ['Supervisor VM ×3']);
             } else {
-              // VKS VPC — branch purple
-              const c       = v.cluster || v;
-              const nm      = (c.name || '').length > 18 ? c.name.substring(0,16)+'…' : c.name;
-              const w       = (c.worker_replicas ?? '?');
-              const vpcNm   = c._vpcName || '';
+              const c        = v.cluster || v;
+              const nm       = (c.name || '').length > 18 ? c.name.substring(0,16)+'…' : c.name;
+              const w        = (c.worker_replicas ?? '?');
+              const vpcNm    = c._vpcName || '';
               const vpcLight = '#f3e5f5';
               svg += circ(vx, Yv, 30, branchFill, branchDark, 'VKS\nVPC');
-              // VPC name below circle
               if (vpcNm) {
                 svg += `<text x="${vx}" y="${Yv+46}" text-anchor="middle"
                   font-size="9" fill="${branchDark}" font-style="italic">${esc(vpcNm)}</text>`;
               }
-              // VIP to the right of circle
-              if (v.vip) {
-                svg += `<text x="${vx+36}" y="${Yv+4}" text-anchor="start"
-                  font-size="9.5" fill="${branchDark}">VIP: ${esc(v.vip)}</text>`;
-              }
+              svg += _vipNatLabels(vx, v.vip, v.natIp || branchVpcNat);
               svg += arrow(vx, Yv + 30, vx, Yb);
               svg += box(vx - 68, Yb, 136, 46, vpcLight, branchDark, [nm, `${w} worker(s)`]);
               if (c.namespace) {

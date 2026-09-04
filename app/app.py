@@ -2156,16 +2156,21 @@ def connectivity_test():
         else:
             capi_items = all_capi
 
+        # NAT IPs optionally passed from frontend (from topology data)
+        sup_vpc_nat = body.get('sup_vpc_nat', '') or ''
+        vks_vpc_nat = body.get('vks_vpc_nat', '') or ''
+
         # ─── Group 1: TCP from app server ────────────────────────────────
         grp1 = {
             "id": "tcp",
-            "title": f"TCP reachability from {server_label}",
+            "title": f"{server_label} → Supervisor and VKS Control Plane VIP:6443",
             "subtitle": "Direct socket probe — source is the app server, not the Supervisor/VKS nodes",
             "rows": [],
         }
         grp1["rows"].append({
             "source": server_label,
-            "destination": f"Supervisor VIP ({supervisor_vip}):6443",
+            "destination": f"Supervisor VIP {supervisor_vip}:6443",
+            "physical_traffic": f"{out['server_ip']} → {supervisor_vip}:6443",
             "method": "tcp", **tcp_probe(supervisor_vip, 6443),
         })
         for c in capi_items:
@@ -2174,7 +2179,8 @@ def connectivity_test():
             if vip:
                 grp1["rows"].append({
                     "source": server_label,
-                    "destination": f"VKS '{c['metadata']['name']}' VIP ({vip}):{port}",
+                    "destination": f"VKS '{c['metadata']['name']}' VIP {vip}:{port}",
+                    "physical_traffic": f"{out['server_ip']} → {vip}:{port}",
                     "method": "tcp", **tcp_probe(vip, port),
                 })
         out["groups"].append(grp1)
@@ -2202,7 +2208,9 @@ def connectivity_test():
                 if not exec_pod:
                     grp2["rows"].append({
                         "source": "Supervisor Node",
-                        "destination": f"VKS '{cname}' VIP ({vip}):{port}",
+                        "destination": f"VKS '{cname}' VIP {vip}:{port}",
+                        "physical_traffic": ((f"{sup_vpc_nat} (VPC Outbound NAT) → {vip}:{port}")
+                                              if sup_vpc_nat else f"(NAT IP unknown) → {vip}:{port}"),
                         "method": "exec", "ok": False, "note": "",
                         "error": ("No exec-capable pod found in Supervisor cluster. "
                                   "The WCP session token may not have pods/exec RBAC "
@@ -2223,7 +2231,9 @@ def connectivity_test():
                 grp2["rows"].append({
                     "source": (f"Supervisor Node{node_tag} — pod {exec_pod} "
                                f"({exec_ns}{'  hostNetwork' if is_hn else '  podNetwork'})"),
-                    "destination": f"VKS '{cname}' VIP ({vip}):{port}",
+                    "destination": f"VKS '{cname}' VIP {vip}:{port}",
+                    "physical_traffic": ((f"{sup_vpc_nat} (VPC Outbound NAT) → {vip}:{port}")
+                                         if sup_vpc_nat else f"(NAT IP unknown) → {vip}:{port}"),
                     "method": "exec",
                     "probe": res.get("method_used", ""),
                     "ok": res["ok"],
@@ -2235,7 +2245,7 @@ def connectivity_test():
         # ─── Group 3: VKS Node → Supervisor VIP (exec) ───────────────────
         grp3 = {
             "id": "vks_to_sup",
-            "title": f"VKS Node → Supervisor Control Plane VIP ({supervisor_vip}):6443",
+            "title": "VKS Node → Supervisor Control Plane VIP:6443",
             "subtitle": ("TCP probe exec'd inside a pod on a VKS worker node. "
                          "Note: VKS worker nodes do not normally need direct access to the "
                          "Supervisor Kubernetes API — this test checks general reachability "
@@ -2254,7 +2264,9 @@ def connectivity_test():
             def _vks_err(msg):
                 grp3["rows"].append({
                     "source": f"VKS '{cname}' Node",
-                    "destination": f"Supervisor VIP ({supervisor_vip}):6443",
+                    "destination": f"Supervisor VIP {supervisor_vip}:6443",
+                    "physical_traffic": ((f"{vks_vpc_nat} (VPC Outbound NAT) → {supervisor_vip}:6443")
+                                          if vks_vpc_nat else f"(NAT IP unknown) → {supervisor_vip}:6443"),
                     "method": "exec", "ok": False, "note": "", "error": msg,
                 })
 
@@ -2338,7 +2350,9 @@ def connectivity_test():
                     grp3["rows"].append({
                         "source": (f"VKS '{cname}' Node{node_tag2} — pod {exec_pod2} "
                                    f"({exec_ns2}{'  hostNetwork' if is_hn2 else '  podNetwork'})"),
-                        "destination": f"Supervisor VIP ({supervisor_vip}):6443",
+                        "destination": f"Supervisor VIP {supervisor_vip}:6443",
+                        "physical_traffic": ((f"{vks_vpc_nat} (VPC Outbound NAT) → {supervisor_vip}:6443")
+                                              if vks_vpc_nat else f"(NAT IP unknown) → {supervisor_vip}:6443"),
                         "method": "exec",
                         "probe": res2.get("method_used", ""),
                         "ok": res2["ok"],
@@ -5423,11 +5437,13 @@ def build_topology():
                                     vlans=vlans_list)
             return ttype, ext_conn
 
-        tgw_info    = {}   # id → {id, name, type, ext_conn}
-        vpc_tgw_map = {}   # vpc_display_name.lower() → {tgw_id, name}
+        # key = "{scope}:{tid}" to avoid collisions when two projects share TGW id 'default'
+        tgw_info         = {}   # "{proj_id}:{tid}" or "global:{tid}" → {id,name,type,ext_conn,nat_ip,ckey,proj_id}
+        vpc_tgw_map      = {}   # vpc_display_name.lower() → {tgw_id, name, nat_ip}
+        vip_to_tgw_ckey  = {}   # VIP IP string → tgw_ckey  (built from NSX LB virtual-servers)
+        all_vpc_debug    = []   # debug list across all projects
 
-        # ── 1. Default-project TGWs  (correct path: no /infra/ segment) ─
-        #    e.g. /orgs/default/projects/default/transit-gateways
+        # ── 1. Project-scoped TGWs ────────────────────────────────────────
         org_r    = s.get(f"{base}/orgs/default/projects", auth=nsx_auth, timeout=10)
         projects = org_r.json().get('results', []) if org_r.ok else []
 
@@ -5435,49 +5451,108 @@ def build_topology():
             proj_id   = proj['id']
             proj_base = f"{base}/orgs/default/projects/{proj_id}"
 
-            # TGWs in this project (path has NO /infra/ segment)
+            # TGWs in this project
             pt_r = s.get(f"{proj_base}/transit-gateways", auth=nsx_auth, timeout=10)
             for tgw in (pt_r.json().get('results', []) if pt_r.ok else []):
-                tid = tgw['id']
-                if tid not in tgw_info:
+                tid  = tgw['id']
+                ckey = f"{proj_id}:{tid}"
+                if ckey not in tgw_info:
                     ttype, ext_conn = _resolve_tgw(
                         f"{proj_base}/transit-gateways/{tid}")
-                    tgw_info[tid] = dict(id=tid, name=tgw.get('display_name', tid),
-                                         type=ttype, ext_conn=ext_conn)
+                    tgw_info[ckey] = dict(id=tid, name=tgw.get('display_name', tid),
+                                          type=ttype, ext_conn=ext_conn, nat_ip='',
+                                          ckey=ckey, proj_id=proj_id)
 
-            # VPCs → map name → tgw_id
+            # VPCs → resolve NAT IP (directly, no connectivity-profile lookup needed)
+            # 'vpc_connectivity_profile' / 'vpc_service_profile' are empty in this NSX build.
+            # Strategy: collect all VPC NAT IPs, then assign to each project TGW by priority:
+            #   C-TGW → prefer 'kube-system*' VPC (Supervisor), else first with a NAT IP
+            #   D-TGW → prefer 'default-region*' VPC (VKS),      else first with a NAT IP
             vpcs_r = s.get(f"{proj_base}/vpcs", auth=nsx_auth, timeout=10)
-            for vpc in (vpcs_r.json().get('results', []) if vpcs_r.ok else []):
-                vpc_name     = vpc.get('display_name', vpc['id'])
-                profile_path = vpc.get('vpc_connectivity_profile', '')
-                if not profile_path:
-                    continue
-                pr_r = s.get(f"https://{nsx_url}/policy/api/v1{profile_path}",
-                             auth=nsx_auth, timeout=10)
-                if pr_r.ok:
-                    tgw_path = pr_r.json().get('transit_gateway_path', '')
-                    tgw_id   = tgw_path.split('/')[-1] if tgw_path else ''
-                    if tgw_id:
-                        vpc_tgw_map[vpc_name.lower()] = {'tgw_id': tgw_id, 'name': vpc_name}
+            vpc_list = vpcs_r.json().get('results', []) if vpcs_r.ok else []
 
-        # ── 2. Also check legacy global path (some NSX versions) ─────────
+            # Collect composite keys for TGWs that belong to this project
+            proj_tgw_ckeys = [k for k in tgw_info if k.startswith(f"{proj_id}:")]
+
+            vpc_debug_list = [{'proj': proj_id, 'vpcs_status': vpcs_r.status_code,
+                               'vpcs_count': len(vpc_list),
+                               'proj_tgw_ckeys': proj_tgw_ckeys}]
+
+            # Pass 1 – collect (vpc_name, vpc_id, nat_ip) for every VPC
+            vpc_nats = []  # [(vpc_name, vpc_id, nat_ip)]
+            for vpc in vpc_list:
+                vpc_name = vpc.get('display_name', vpc['id'])
+                vpc_id   = vpc['id']
+                nat_ip   = ''
+                nat_r    = s.get(f"{proj_base}/vpcs/{vpc_id}/nat/DEFAULT/nat-rules",
+                                 auth=nsx_auth, timeout=10)
+                vdbg = {'vpc': vpc_name, 'id': vpc_id, 'nat_status': nat_r.status_code}
+                if nat_r.ok:
+                    rules = nat_r.json().get('results', [])
+                    vdbg['nat_rules_count'] = len(rules)
+                    for rule in rules:
+                        translated = rule.get('translated_network', '') or ''
+                        if translated:
+                            nat_ip = str(translated).split('/')[0]
+                            break
+                vdbg['nat_ip'] = nat_ip
+
+                # NOTE: LB virtual-server endpoints return 404 in this NSX build.
+                # VKS→TGW assignment is done in the frontend via /20 subnet matching
+                # between the cluster VIP and the TGW's nat_ip.
+
+                vpc_nats.append((vpc_name, vpc_id, nat_ip))
+                vpc_debug_list.append(vdbg)
+
+            # Pass 2 – assign best NAT IP to each TGW in this project
+            tgw_id_fallback = tgw_info[proj_tgw_ckeys[0]]['id'] if proj_tgw_ckeys else ''
+            for ckey in proj_tgw_ckeys:
+                ttype = tgw_info[ckey].get('type', '')
+                # Priority order for choosing which VPC's NAT IP to show
+                if ttype == 'C':
+                    # Supervisor VPC first, then any
+                    ordered = sorted(vpc_nats,
+                        key=lambda v: 0 if 'kube-system' in v[0].lower() else 1)
+                else:
+                    # VKS / default-region VPC first, then any
+                    ordered = sorted(vpc_nats,
+                        key=lambda v: 0 if 'default-region' in v[0].lower() else 1)
+                for vn, vid, ni in ordered:
+                    if ni:
+                        tgw_info[ckey]['nat_ip'] = ni
+                        break  # first matching wins
+
+            # Populate vpc_tgw_map for VPC name display (best-effort)
+            for vn, vid, ni in vpc_nats:
+                if tgw_id_fallback:
+                    vpc_tgw_map[vn.lower()] = {
+                        'tgw_id': tgw_id_fallback, 'name': vn, 'nat_ip': ni}
+
+            all_vpc_debug.extend(vpc_debug_list)
+
+        # ── 2. Legacy global path (some NSX versions) ─────────────────────
         gl_r = s.get(f"{base}/infra/transit-gateways", auth=nsx_auth, timeout=10)
         for tgw in (gl_r.json().get('results', []) if gl_r.ok else []):
-            tid = tgw['id']
-            if tid not in tgw_info:
+            tid  = tgw['id']
+            ckey = f"global:{tid}"
+            if ckey not in tgw_info:
                 ttype, ext_conn = _resolve_tgw(f"{base}/infra/transit-gateways/{tid}")
-                tgw_info[tid] = dict(id=tid, name=tgw.get('display_name', tid),
-                                     type=ttype, ext_conn=ext_conn)
+                tgw_info[ckey] = dict(id=tid, name=tgw.get('display_name', tid),
+                                      type=ttype, ext_conn=ext_conn, nat_ip='',
+                                      ckey=ckey, proj_id='global')
 
         tgw_list = sorted(tgw_info.values(),
                           key=lambda t: 0 if t.get('type') == 'D' else 1)
-        return jsonify({'success': True, 'tgws': tgw_list, 'vpc_tgw_map': vpc_tgw_map,
+        return jsonify({'success': True, 'tgws': tgw_list,
+                        'vpc_tgw_map': vpc_tgw_map,
+                        'vip_to_tgw_ckey': vip_to_tgw_ckey,
                         '_debug': {
                             'global_tgw_status': gl_r.status_code if gl_r.ok else f"FAIL-{gl_r.status_code}",
                             'global_tgw_count':  len([t for t in tgw_info.values()]),
                             'projects_status':   org_r.status_code if org_r.ok else f"FAIL-{org_r.status_code}",
                             'projects_found':    [p['id'] for p in projects],
                             'tgw_ids':           list(tgw_info.keys()),
+                                'tgw_types':         {k: v.get('type','?') for k,v in tgw_info.items()},
                         }})
 
     except Exception as e:
