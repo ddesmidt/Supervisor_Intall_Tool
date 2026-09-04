@@ -267,24 +267,28 @@ The diagram shows nodes top-to-bottom:
 | Physical router | Hexagon | All uplink VLANs and subnets / gateway IPs discovered from Tier-0 EXTERNAL interfaces or the DVLAN connection |
 | External Connection | Pill label | **Distributed**: DVLAN name + VLAN ID + subnet  **Centralized**: Tier-0 name + "BGP" |
 | Transit Gateway | Circle | TGW name — highlighted in blue if it is the Supervisor's TGW |
-| Supervisor VIP | Circle | Supervisor Kubernetes control plane VIP |
-| VPC / Namespace | Rectangle | One box per VPC connected to this TGW, showing VPC name |
-| VKS Cluster | Rectangle | Control plane VIP — the selected cluster is highlighted in blue |
+| Supervisor VIP | Circle | Supervisor Kubernetes control plane VIP + **NAT IP** (VPC Outbound NAT from kube-system VPC) |
+| VKS Cluster | Circle | Control plane VIP + **NAT IP** (VPC Outbound NAT) — the selected cluster is highlighted in blue |
+
+When two Centralized branches share the same Tier-0, the T0 node is drawn once at the center and both TGW arrows converge on it.
 
 Arrows with arrowheads connect every layer in the path.
 
 ### NSX data source
 
 The topology endpoint queries:
-1. **All NSX projects** (`/orgs/default/projects`) — finds Transit Gateways in each project
+1. **All NSX projects** (`/orgs/default/projects`) — finds Transit Gateways in each project using composite keys (`proj_id:tgw_id`) to prevent cross-project collisions
 2. **Legacy global path** (`/infra/transit-gateways`) — for older NSX versions
 3. For each TGW, resolves attachments to determine **Distributed** (DVLAN connection) or **Centralized** (Gateway Connection → Tier-0 BGP) mode
 4. Enumerates Tier-0 locale-service **EXTERNAL interfaces** to collect all uplink VLANs and subnets (deduped per VLAN)
-5. Maps VPCs → VPC Connectivity Profile → TGW so VPC names appear on the correct branch
+5. **NAT IP resolution**: reads each VPC's NAT rules (`/vpcs/{id}/nat/DEFAULT/nat-rules → translated_network`) and assigns the best NAT IP to each TGW:
+   - Centralized TGW → prefers `kube-system*` VPC (Supervisor's outbound NAT IP)
+   - Distributed TGW → prefers `default-region*` VPC (VKS outbound NAT IP)
+6. **VKS → TGW assignment**: each VKS cluster is placed on the correct TGW branch by matching the cluster's control-plane VIP against each TGW's NAT IP using a /20 subnet comparison
 
 ### Caching
 
-The NSX response is cached in the page session. If you open the Topology modal first and then click "Test" on the same cluster, the topology diagram in the Connectivity Test panel appears instantly without a second NSX call.
+The NSX response is cached in the page session. If you open the Topology modal first and then click "Test" on the same cluster, the topology diagram in the Connectivity Test panel appears instantly without a second NSX call. The connectivity test also pre-fetches topology automatically (if not cached) so it has NAT IPs available before running.
 
 ---
 
@@ -332,6 +336,7 @@ Each row shows:
 |---|---|
 | Source | Pod name, namespace, node name, and whether hostNetwork is used |
 | Destination | Target IP and port |
+| Traffic in Physical Fabric | The **actual physical source → destination** after NAT — e.g. `10.1.7.141 (VPC Outbound NAT) → 10.1.12.1:6443`. NAT IPs are extracted from the topology data before the test runs. |
 | Method | `tcp` (direct socket) or `exec` (probe inside pod) |
 | Probe | Tool used (`python3`, `nc`, `curl`, `wget`) |
 | Result | ✅ OK or ❌ FAIL |
